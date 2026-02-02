@@ -19,7 +19,6 @@
   "dependencies": {
     "config": "4.2.0",
     "fastify": "5.7.4",
-    "fastify-plugin": "5.1.0",
     "js-yaml": "4.1.1",
     "ovh": "2.0.3",
     "pino": "10.3.0",
@@ -29,7 +28,10 @@
     "@types/config": "3.3.5",
     "@types/js-yaml": "4.0.9",
     "@types/node": "25.2.0",
+    "@types/supertest": "6.0.3",
     "@vitest/coverage-v8": "4.0.18",
+    "fastify-plugin": "5.1.0",
+    "supertest": "7.2.2",
     "tsx": "4.21.0",
     "typescript": "5.9.3",
     "vitest": "4.0.18",
