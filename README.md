@@ -2,18 +2,23 @@
 
 [![Build Status](https://img.shields.io/badge/status-active-brightgreen.svg)]()
 [![Type](https://img.shields.io/badge/stack-Fastify%20|%20TypeScript%20|%20Vitest-blue.svg)]()
+[![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)]()
 
-A dynamic DNS updater for OVH accounts. It monitors your public IP address and automatically updates specified OVH DNS A-records when a change is detected. Unlike previous versions, this "NextGen" edition supports **multiple OVH accounts** and multiple domains/subdomains per account.
+A modern, dynamic DNS updater for OVH accounts. It monitors your public IP address and automatically updates specified OVH DNS A-records.
+
+This **"NextGen"** edition is built from the ground up to be resilient, multi-tenant, and highly configurable.
 
 ## Features
 
-- **Multi-Account Support**: Manage different OVH credentials in a single instance.
-- **Resilient IP Detection**: Rotates between multiple public IP providers to ensure detection even if one provider is down.
-- **Smart Updates**: Only performs API requests if the IP actually changed (or if a record is out of sync).
-- **Auto-Refresh**: Automatically triggers the zone refresh in OVH after updates.
-- **REST API**: Control and monitor the service via HTTP.
-- **Background Scheduler**: Runs automatically every 10 minutes (configurable).
-- **Modern Stack**: Fastify v5, TypeScript, node-config, and Vitest.
+- **Multi-Account/Multi-Tenancy**: Manage completely different OVH accounts (different app keys/secrets) within a single instance.
+- **Resilient IP Detection**: Rotates between providers (`ipify.org`, `ifconfig.me`, `icanhazip.com`) to ensure detection works even if some services are down.
+- **Root Domain Support**: Automatic normalization of `@` to root record updates.
+- **Legacy Compatibility**: Support for Mikrotik-style scripts via GET requests with tokens in the URL.
+- **Smart Sync**:
+  - **Background Scheduler**: Periodically checks and updates records (default: every 10 mins).
+  - **On-Demand API**: Trigger updates via REST API.
+- **Feature Toggles**: Enable/Disable the scheduler or the API independently via configuration.
+- **Modern Stack**: Node.js 22+, Fastify 5, TypeScript, Pino logging, and Vitest.
 
 ## Installation
 
@@ -21,115 +26,103 @@ A dynamic DNS updater for OVH accounts. It monitors your public IP address and a
 
 - [Node.js](https://nodejs.org/) v22 or higher.
 - [pnpm](https://pnpm.io/) v10+.
-- An OVH Account with API credentials (Application Key, Application Secret, Consumer Key). You can generate them at [https://api.ovh.com/createToken/](https://api.ovh.com/createToken/).
+- OVH API credentials. Create them at [https://api.ovh.com/createToken/](https://api.ovh.com/createToken/). Required rights:
+  - `GET /domain/zone/*`
+  - `PUT /domain/zone/*`
+  - `POST /domain/zone/*/refresh`
 
 ### Setup
 
-1. Clone the repository and navigate to the project directory.
-2. Install dependencies:
+1. Install dependencies:
    ```bash
    pnpm install
    ```
-3. Create a local configuration (see [Configuration](#configuration) section).
+2. Build the project:
+   ```bash
+   pnpm build
+   ```
 
 ## Configuration
 
-The project uses `node-config`. You can find the base configuration in `config/default.yaml`. For local development, it is recommended to create a `config/local.yaml`.
+The project uses `node-config`. Configuration is merged from `config/default.yaml`, environment variables, and optionally `config/local.yaml`.
 
-### Example `config/local.yaml`
+### Settings Overview
+
+| Path | Description | Default |
+| :--- | :--- | :--- |
+| `server.port` | HTTP Port | `3000` |
+| `server.logLevel` | Logging level (pino) | `info` |
+| `security.adminToken` | Master token for API access | `changeme` |
+| `scheduler.enabled` | Enable background checks | `true` |
+| `scheduler.intervalMs` | Interval between checks | `600000` (10m) |
+| `ondemand.enabled` | Enable the REST API | `true` |
+
+### Account Configuration
+
+Each account in the `accounts` array can have:
+- `id`: Unique identifier for logging/API.
+- `token`: (Optional) A dedicated token for legacy GET access to this account.
+- `credentials`: OVH endpoint and keys.
+- `domains`: List of domains and subdomains (use `@` for root).
 
 ```yaml
-server:
-  port: 3000
-  logLevel: 'debug'
-
-security:
-  adminToken: 'your-secure-token'
-
 accounts:
-  - id: 'personal-account'
-    provider: 'ovh'
+  - id: 'my-home-server'
+    token: 'my-secret-path-token'
     enabled: true
     credentials:
       endpoint: 'ovh-eu'
-      appKey: 'your-app-key'
-      appSecret: 'your-app-secret'
-      consumerKey: 'your-consumer-key'
+      appKey: '...'
+      appSecret: '...'
+      consumerKey: '...'
     domains:
       - name: 'example.com'
-        subdomains: 
-          - '@' # Root domain
-          - 'www'
-          - 'vpn'
-      - name: 'another-domain.es'
-        subdomains: ['*'] 
-
-  - id: 'work-account'
-    # ... another set of credentials
-```
-
-### Environment Variables
-
-You can also use environment variables as defined in `config/custom-environment-variables.yaml`:
-
-- `ADMIN_TOKEN`: Maps to `security.adminToken`.
-- `OVH_ACCOUNTS`: A JSON string representing the accounts array.
-
-## Running the Service
-
-### Development Mode
-
-Runs with `tsx` and hot-reload:
-```bash
-pnpm dev
-```
-
-### Production Build
-
-```bash
-pnpm build
-pnpm start
-```
-
-### Using Docker
-
-```bash
-docker build -t ovh-dns-updater-nextgen .
-docker run -p 3000:3000 -v ./config:/usr/src/app/config ovh-dns-updater-nextgen
+        subdomains: ['@', 'vpn', 'cloud']
 ```
 
 ## API Reference
 
-### Health Check
-`GET /health` - Check if the service is running.
+All on-demand routes are prefixed with `/api`.
 
-### Get Public IP
-`GET /api/public-ip` - Returns the currently detected public IP.
+### Public Endpoints
+- `GET /health`: Liveness check.
+- `GET /api/public-ip`: Returns the currently detected public IP.
 
-### Global Sync
-`POST /api/sync` - Forces a full synchronization of all enabled accounts.
-- **Auth**: Requires `Authorization: Bearer <adminToken>`.
+### Management (Requires `Authorization: Bearer <adminToken>`)
+- `POST /api/sync`: Force a check and update for all enabled accounts.
+- `POST /api/accounts/:id/sync`: Sync only a specific account.
 
-### Legacy Compatibility (Mikrotik / GET style)
-These endpoints are designed for backward compatibility with routers (like Mikrotik) that perform GET requests with the token in the URL.
+### Legacy / Mikrotik (Requires valid `:token` in path)
+Compatible with devices that can only perform GET requests. The `:token` can be either the `adminToken` or the specific account `token`.
 
-- `GET /api/:token/checkip` - Similar to `/api/sync` but using GET and path token.
-- `GET /api/:token/setip/:ip` - Manually set a specific IP for all accounts using GET and path token.
+- `GET /api/:token/checkip`: Trigger a global sync.
+- `GET /api/:token/setip/:ip`: Force a specific IP update for all accounts.
 
-## Development
+## Running
 
-### Testing
-Tests are written with Vitest.
 ```bash
-pnpm test       # Run once
-pnpm test:watch # Run in watch mode
+# Development
+pnpm dev
+
+# Production
+pnpm start
 ```
 
-### Folder Structure
-- `src/services`: Business logic (IP Detection, OVH Communication).
-- `src/plugins`: Fastify plugins (Services injection, Scheduler).
-- `src/routes`: API endpoints.
-- `config/`: Configuration files.
+### Docker
+```bash
+docker build -t ovh-dns-updater-ng .
+docker run -p 3000:3000 -v ./config:/app/config ovh-dns-updater-ng
+```
+
+## Testing
+
+The project maintains high coverage (90%+) using Vitest.
+
+```bash
+pnpm test          # Run tests
+pnpm test:coverage # Generate coverage report
+```
 
 ## License
 MIT
+
