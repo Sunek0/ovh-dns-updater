@@ -1,0 +1,41 @@
+image: docker:latest
+
+# services:
+#   - docker:dind
+
+variables:
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:node-24
+
+stages:
+  - build
+  - push
+
+before_script:
+  - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+
+build_image:
+  stage: build
+  script:
+    - |
+      if [ "$CI_COMMIT_REF_NAME" = "main" ]; then
+        export IMAGE_TAG="$CI_REGISTRY_IMAGE:release"
+      elif [ "$CI_COMMIT_REF_NAME" = "develop" ]; then
+        export IMAGE_TAG="$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+      else
+        export IMAGE_TAG="$CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME"
+      fi
+      docker build -t $IMAGE_TAG -t $CI_REGISTRY_IMAGE:latest .
+    - echo $IMAGE_TAG > image_tag.txt
+  artifacts:
+    paths:
+      - image_tag.txt
+
+push_image:
+  stage: push
+  script:
+    - export IMAGE_TAG=$(cat image_tag.txt)
+    - docker push $IMAGE_TAG
+    - docker push $CI_REGISTRY_IMAGE:latest
+  only:
+    - main
+    - develop

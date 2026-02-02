@@ -1,0 +1,14 @@
+server:
+  port: 3000
+  host: '0.0.0.0'
+  logLevel: 'info'
+
+security:
+  adminToken: 'change-me'
+
+ipProviders:
+  - https://api.ipify.org
+  - https://ifconfig.me/ip
+  - https://icanhazip.com
+
+accounts: []

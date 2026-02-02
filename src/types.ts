@@ -1,0 +1,36 @@
+export interface SubdomainConfig {
+  [domain: string]: string;
+}
+
+export interface DomainConfig {
+  name: string;
+  subdomains: (string | SubdomainConfig)[];
+}
+
+export interface OvhCredentials {
+  endpoint: string;
+  appKey: string;
+  appSecret: string;
+  consumerKey: string;
+}
+
+export interface AccountConfig {
+  id: string;
+  provider: 'ovh';
+  enabled?: boolean;
+  credentials: OvhCredentials;
+  domains: DomainConfig[];
+}
+
+export interface AppConfig {
+  server: {
+    port: number;
+    host: string;
+    logLevel: string;
+  };
+  security: {
+    adminToken: string;
+  };
+  ipProviders: string[];
+  accounts: AccountConfig[];
+}
