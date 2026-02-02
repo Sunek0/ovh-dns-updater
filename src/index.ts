@@ -1,5 +1,4 @@
 import Fastify from 'fastify';
-import sensible from '@fastify/sensible';
 import config from 'config';
 import { AppConfig } from './types.js';
 import servicesPlugin from './plugins/services.js';
@@ -26,9 +25,6 @@ const start = async () => {
   });
 
   try {
-    // Core Plugins
-    await fastify.register(sensible);
-
     // Custom Plugins
     await fastify.register(servicesPlugin);
     await fastify.register(schedulerPlugin);

@@ -16,11 +16,7 @@
   "license": "ISC",
   "packageManager": "pnpm@10.28.2",
   "dependencies": {
-    "@fastify/autoload": "6.3.1",
-    "@fastify/env": "5.0.3",
-    "@fastify/sensible": "6.0.4",
     "config": "4.2.0",
-    "dotenv": "17.2.3",
     "fastify": "5.7.4",
     "fastify-plugin": "5.1.0",
     "js-yaml": "4.1.1",
