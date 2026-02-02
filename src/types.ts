@@ -31,6 +31,13 @@ export interface AppConfig {
   security: {
     adminToken: string;
   };
+  ondemand: {
+    enabled: boolean;
+  };
+  scheduler: {
+    enabled: boolean;
+    interval: number;
+  };
   ipProviders: string[];
   accounts: AccountConfig[];
 }

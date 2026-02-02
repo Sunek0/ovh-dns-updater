@@ -27,10 +27,15 @@ const start = async () => {
   try {
     // Custom Plugins
     await fastify.register(servicesPlugin);
-    await fastify.register(schedulerPlugin);
+    
+    if (appConfig.scheduler?.enabled !== false) {
+      await fastify.register(schedulerPlugin);
+    }
 
     // Routes
-    await fastify.register(apiRoutes, { prefix: '/api' });
+    if (appConfig.ondemand?.enabled !== false) {
+      await fastify.register(apiRoutes, { prefix: '/api' });
+    }
     
     fastify.get('/health', async () => ({ status: 'ok' }));
 

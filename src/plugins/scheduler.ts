@@ -3,7 +3,7 @@ import { FastifyPluginAsync } from 'fastify';
 
 // Simple background scheduler
 const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
-  const INTERVAL = 1000 * 60 * 10; // 10 minutes
+  const INTERVAL = (fastify.config.scheduler?.interval || 600) * 1000;
   let intervalId: NodeJS.Timeout | undefined;
 
   // Cleanup must be registered during plugin registration, not deferred
