@@ -6,6 +6,13 @@ server:
 security:
   adminToken: 'change-me'
 
+ondemand:
+  enabled: true
+
+scheduler:
+  enabled: true
+  interval: 600
+
 ipProviders:
   - https://api.ipify.org
   - https://ifconfig.me/ip
