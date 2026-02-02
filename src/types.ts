@@ -18,6 +18,7 @@ export interface AccountConfig {
   id: string;
   provider: 'ovh';
   enabled?: boolean;
+  token?: string; // Legacy access token
   credentials: OvhCredentials;
   domains: DomainConfig[];
 }

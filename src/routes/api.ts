@@ -22,7 +22,12 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
 
       // 2. Try Path Parameter (Legacy support for Mikrotik)
       const pathToken = (request.params as any)?.token;
-      if (pathToken === expectedToken) return;
+      if (pathToken) {
+          // Check if it matches admin token OR any account token
+          if (pathToken === expectedToken) return;
+          const account = fastify.config.accounts.find(a => a.token === pathToken);
+          if (account) return;
+      }
 
       // 3. Unauthorized if neither matches
       reply.code(401).send({ error: 'Unauthorized' });
