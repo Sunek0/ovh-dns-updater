@@ -6,8 +6,6 @@
 
 A modern, dynamic DNS updater for OVH accounts. It monitors your public IP address and automatically updates specified OVH DNS A-records.
 
-This **"NextGen"** edition is built from the ground up to be resilient, multi-tenant, and highly configurable.
-
 ## Features
 
 - **Multi-Account/Multi-Tenancy**: Manage completely different OVH accounts (different app keys/secrets) within a single instance.
@@ -18,13 +16,13 @@ This **"NextGen"** edition is built from the ground up to be resilient, multi-te
   - **Background Scheduler**: Periodically checks and updates records (default: every 10 mins).
   - **On-Demand API**: Trigger updates via REST API.
 - **Feature Toggles**: Enable/Disable the scheduler or the API independently via configuration.
-- **Modern Stack**: Node.js 22+, Fastify 5, TypeScript, Pino logging, and Vitest.
+- **Modern Stack**: Node.js 24+, Fastify 5, TypeScript, Pino logging, and Vitest.
 
 ## Installation
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) v22 or higher.
+- [Node.js](https://nodejs.org/) v24 or higher.
 - [pnpm](https://pnpm.io/) v10+.
 - OVH API credentials. Create them at [https://api.ovh.com/createToken/](https://api.ovh.com/createToken/). Required rights:
   - `GET /domain/zone/*`
