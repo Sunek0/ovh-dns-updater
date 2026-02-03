@@ -14,6 +14,9 @@ importers:
       fastify:
         specifier: 5.7.4
         version: 5.7.4
+      fastify-plugin:
+        specifier: 5.1.0
+        version: 5.1.0
       js-yaml:
         specifier: 4.1.1
         version: 4.1.1
@@ -42,9 +45,6 @@ importers:
       '@vitest/coverage-v8':
         specifier: 4.0.18
         version: 4.0.18(vitest@4.0.18(@types/node@25.2.0)(tsx@4.21.0))
-      fastify-plugin:
-        specifier: 5.1.0
-        version: 5.1.0
       supertest:
         specifier: 7.2.2
         version: 7.2.2
