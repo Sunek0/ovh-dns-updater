@@ -8,7 +8,7 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     const isProtected = 
       request.routeOptions.url?.startsWith('/api/sync') || 
       request.routeOptions.url?.startsWith('/api/accounts') ||
-      request.routeOptions.url?.includes('/:token/');
+      request.routeOptions.url?.includes('/api/:token/');
 
     if (isProtected) {
       const expectedToken = fastify.config.security.adminToken;
