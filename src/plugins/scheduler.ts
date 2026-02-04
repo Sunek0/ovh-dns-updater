@@ -18,7 +18,7 @@ const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
   fastify.addHook('onReady', async () => {
     // Small delay to ensure the event loop is free and server is listening
     setTimeout(() => {
-      fastify.log.info('Starting background scheduler (10m)');
+      fastify.log.info(`Starting background scheduler (${INTERVAL}s)`);
       
       // Initial run immediately
       fastify.updaterService.syncAll().catch(err => {
