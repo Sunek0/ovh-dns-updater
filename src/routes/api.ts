@@ -33,27 +33,32 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     }
   });
 
-  fastify.get('/public-ip', async (_req, _res) => {
+  fastify.get('/public-ip', async (req, _res) => {
+    req.log.info('Received public-ip request');
     const ip = await fastify.updaterService.getPublicIp();
     return { ip };
   });
 
-  fastify.post('/sync', async (_req, _res) => {
+  fastify.post('/sync', async (req, _res) => {
+    req.log.info('Received sync all request');
     const result = await fastify.updaterService.syncAll(true);
     return result;
   });
 
   fastify.post<{ Params: { id: string } }>('/accounts/:id/sync', async (req, _res) => {
+    req.log.info(`Received sync request for account: ${req.params.id}`);
     const ip = await fastify.updaterService.syncAccount(req.params.id);
     return { message: 'Synced', ip };
   });
 
-  fastify.get<{ Params: { token: string } }>('/:token/checkip', async (_req, _res) => {
+  fastify.get<{ Params: { token: string } }>('/:token/checkip', async (req, _res) => {
+    req.log.info(`Received checkip request`);
     const result = await fastify.updaterService.syncAll(false);
     return result;
   });
 
   fastify.get<{ Params: { token: string; ip: string } }>('/:token/setip/:ip', async (req, _res) => {
+    req.log.info(`Received setip request with IP: ${req.params.ip}`);
     const result = await fastify.updaterService.syncAll(true, req.params.ip);
     return result;
   });
