@@ -80,30 +80,30 @@ export class OvhAccount {
     // 1. Find the record ID
     const records = await this.request<number[]>('GET', `/domain/zone/${domain}/record`, {
       fieldType: 'A',
-      subDomain: sub,
+      subDomain: sub || undefined,
     });
 
     if (!records || records.length === 0) {
-      this.logger.warn({ domain, sub }, 'Record not found, skipping (creation not supported yet)');
+      this.logger.warn({ domain, sub }, 'Record not found in OVH, skipping (creation not supported yet)');
       return false;
     }
 
     // usually one record per type/subdomain
     const recordId = records[0];
 
-    // 2. Get current value
+    // 2. Get current value from OVH to verify if update is needed
     const recordData = await this.request<{ target: string }>('GET', `/domain/zone/${domain}/record/${recordId}`);
 
     if (recordData.target === targetIp) {
-      this.logger.debug({ domain, sub, ip: targetIp }, 'IP already matches, skipping');
+      this.logger.debug({ domain, sub, ip: targetIp }, 'IP already matches in OVH, skipping update');
       return false;
     }
 
-    // 3. Update
-    this.logger.info({ domain, sub, oldIp: recordData.target, newIp: targetIp }, 'Updating record IP');
+    // 3. Perform the update since it's different
+    this.logger.info({ domain, sub, oldIp: recordData.target, newIp: targetIp }, 'IP desynchronized in OVH, updating record');
     await this.request('PUT', `/domain/zone/${domain}/record/${recordId}`, {
       target: targetIp,
-      subDomain: sub, // Required strictly?
+      subDomain: sub || undefined,
     });
 
     return true;

@@ -40,15 +40,18 @@ describe('OvhAccount', () => {
     vi.clearAllMocks();
   });
 
-  it('should update records only if IP changed', async () => {
-    // 1. mock GET records for @ and www
+  it('should update records only if IP changed in OVH', async () => {
+    // 1. mock sequence for @ and www
+    // For @: GET records -> [123], GET details -> target '1.2.3.4' (changed) -> PUT -> POST refresh
+    // For www: GET records -> [456], GET details -> target '1.1.1.1' (matching) -> skip
+    
     mockRequest
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123])) // GET @
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.2.3.4' })) // GET details @ (changed)
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})) // PUT @
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, [456])) // GET www
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.1.1.1' })) // GET details www (matching)
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})); // POST refresh
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123]))   // GET @ (get ID)
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.2.3.4' })) // GET details @
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {}))      // PUT @
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [456]))   // GET www
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.1.1.1' })) // GET details www
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {}));     // POST refresh
 
     const account = new OvhAccount(config, mockLogger);
     await account.updateAccount('1.1.1.1');
@@ -72,7 +75,8 @@ describe('OvhAccount', () => {
   });
 
   it('should handle record not found', async () => {
-    mockRequest.mockImplementationOnce((m, p, pa, cb) => cb(null, [])); // No records
+    mockRequest
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [])); // get ID -> no
 
     const account = new OvhAccount(config, mockLogger);
     await account.updateAccount('1.1.1.1');
@@ -82,12 +86,12 @@ describe('OvhAccount', () => {
 
   it('should handle refresh failure without stopping', async () => {
       mockRequest
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123]))
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.2.3.4' }))
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, {}))
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, [456]))
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '2.2.2.2' }))
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, {}))
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123]))   // @ get ID
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.2.3.4' })) // @ details
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {}))      // @ PUT
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [456]))   // www get ID
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '2.2.2.2' })) // www details
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {}))      // www PUT
       .mockImplementationOnce((m, p, pa, cb) => cb(new Error('Refresh Failed'))); // Refresh fails
 
     const account = new OvhAccount(config, mockLogger);
