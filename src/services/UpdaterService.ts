@@ -36,21 +36,20 @@ export class UpdaterService {
     // 1. Get IP (use provided or detect)
     const currentIp = providedIp || await this.ipService.getPublicIp();
     
-    // Optimization: If IP hasn't changed and not forced, maybe skip?
+    // 2. Logic for skipping or verifying
     if (!force && currentIp === this.lastIp) {
-      this.logger.info({ ip: currentIp }, 'IP unchanged, verifying accounts anyway (lazy check)');
-      // In the old code, it skipped *everything* if IP didn't change (in checkIp). 
-      // But here we want robustness. Maybe we should check anyway in case records were changed externally?
-      // For API quota reasons, skipping is better.
-      // However, the prompt asked for "robustness".
-      // Let's implement a "smart skip" logic: skip if IP matches cached and successful last run?
-      // For now, I'll just log and proceed. The OvhAccount.updateAccount logic checks record value before writing, so it's safe (idempotent).
+      this.logger.info({ ip: currentIp }, 'IP matches last detected IP. Verifying OVH consistency anyway.');
+    } else if (force) {
+      this.logger.info({ ip: currentIp }, 'Forcing global sync regardless of last IP.');
+    } else {
+      this.logger.info({ oldIp: this.lastIp, newIp: currentIp }, 'IP change detected or initial sync.');
     }
 
     this.lastIp = currentIp;
     const results: Record<string, string> = {};
 
-    // 2. Update all accounts in parallel
+    // 3. Update all accounts in parallel
+    // Each OvhAccount.updateAccount will verify if the IP is actually different in OVH before writing
     const promises = Array.from(this.accounts.entries()).map(async ([id, account]) => {
       try {
         await account.updateAccount(currentIp);

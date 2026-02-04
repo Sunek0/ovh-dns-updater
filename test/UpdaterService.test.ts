@@ -88,6 +88,26 @@ describe('UpdaterService', () => {
     expect(mockUpdateAccount).toHaveBeenCalled();
   });
 
+  it('should still verify with OVH if current IP matches last IP', async () => {
+    const service = new UpdaterService(config, mockIpService, mockLogger);
+    
+    // First sync sets lastIp to 1.1.1.1
+    await service.syncAll();
+    expect(mockUpdateAccount).toHaveBeenCalledTimes(2);
+    
+    mockUpdateAccount.mockClear();
+    
+    // Second sync with same IP
+    await service.syncAll();
+    
+    // Should still call updateAccount because we must "revisar en OVH"
+    expect(mockUpdateAccount).toHaveBeenCalledTimes(2);
+    expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ ip: '1.1.1.1' }), 
+        'IP matches last detected IP. Verifying OVH consistency anyway.'
+    );
+  });
+
   it('should get public ip', async () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
     const ip = await service.getPublicIp();
