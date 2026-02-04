@@ -30,7 +30,7 @@ export interface AppConfig {
     logLevel: string;
   };
   security: {
-    adminToken: string;
+    apiKey: string;
   };
   ondemand: {
     enabled: boolean;
