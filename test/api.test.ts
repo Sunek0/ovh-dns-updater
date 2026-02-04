@@ -21,50 +21,50 @@ describe('API Routes', () => {
 
         // Mock config for auth logic
         app.decorate('config', {
-            security: { adminToken: 'master-token' },
+            security: { apiKey: 'master-token' },
             accounts: [{ id: 'acc1', token: 'legacy-token' }]
         });
 
-        await app.register(apiRoutes);
+        await app.register(apiRoutes, { prefix: '/api' });
         await app.ready();
     });
 
-    it('POST /sync should call syncAll (as admin)', async () => {
+    it('POST /api/sync should call syncAll (as admin)', async () => {
         mockSyncAll.mockResolvedValue({ ip: '1.2.3.4', results: { acc1: 'Success' } });
         
         const res = await request(app.server)
-            .post('/sync')
+            .post('/api/sync')
             .set('Authorization', 'Bearer master-token');
         
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('1.2.3.4');
     });
 
-    it('GET /:token/checkip should work with legacy token', async () => {
+    it('GET /api/:token/checkip should work with legacy token', async () => {
         mockSyncAll.mockResolvedValue({ ip: '1.2.3.4', results: { acc1: 'Success' } });
 
-        const res = await request(app.server).get('/legacy-token/checkip');
+        const res = await request(app.server).get('/api/legacy-token/checkip');
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('1.2.3.4');
     });
 
-    it('GET /:token/checkip should fail with wrong token', async () => {
-        const res = await request(app.server).get('/wrong-token/checkip');
+    it('GET /api/:token/checkip should fail with wrong token', async () => {
+        const res = await request(app.server).get('/api/wrong-token/checkip');
         expect(res.status).toBe(401);
     });
 
-    it('GET /public-ip should return public ip', async () => {
+    it('GET /api/public-ip should return public ip', async () => {
         // Mock getPublicIp on the updaterService as well if used
         app.updaterService.getPublicIp = vi.fn().mockResolvedValue('5.5.5.5');
-        const res = await request(app.server).get('/public-ip');
+        const res = await request(app.server).get('/api/public-ip');
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('5.5.5.5');
     });
 
-    it('POST /accounts/:id/sync should sync specific account', async () => {
+    it('POST /api/accounts/:id/sync should sync specific account', async () => {
         mockSyncAccount.mockResolvedValue('1.1.1.1');
         const res = await request(app.server)
-            .post('/accounts/acc1/sync')
+            .post('/api/accounts/acc1/sync')
             .set('Authorization', 'Bearer master-token');
         
         expect(res.status).toBe(200);
@@ -72,9 +72,9 @@ describe('API Routes', () => {
         expect(mockSyncAccount).toHaveBeenCalledWith('acc1');
     });
 
-    it('GET /:token/setip/:ip should work with legacy token', async () => {
+    it('GET /api/:token/setip/:ip should work with legacy token', async () => {
         mockSyncAll.mockResolvedValue({ ip: '9.9.9.9', results: { acc1: 'Success' } });
-        const res = await request(app.server).get('/legacy-token/setip/9.9.9.9');
+        const res = await request(app.server).get('/api/legacy-token/setip/9.9.9.9');
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('9.9.9.9');
         expect(mockSyncAll).toHaveBeenCalledWith(true, '9.9.9.9');

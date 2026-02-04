@@ -9,22 +9,21 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
       request.routeOptions.url?.startsWith('/api/sync') || 
       request.routeOptions.url?.startsWith('/api/accounts') ||
       request.routeOptions.url?.includes('/api/:token/');
-
     if (isProtected) {
-      const expectedToken = fastify.config.security.adminToken;
+      const expectedApiKey = fastify.config.security.apiKey;
       
       // 1. Try Authorization Header (Bearer)
       const authHeader = request.headers.authorization;
       if (authHeader) {
         const token = authHeader.replace('Bearer ', '');
-        if (token === expectedToken) return;
+        if (token === expectedApiKey) return;
       }
 
       // 2. Try Path Parameter (Legacy support for Mikrotik)
       const pathToken = (request.params as any)?.token;
       if (pathToken) {
           // Check if it matches admin token OR any account token
-          if (pathToken === expectedToken) return;
+          if (pathToken === expectedApiKey) return;
           const account = fastify.config.accounts.find(a => a.token === pathToken);
           if (account) return;
       }
