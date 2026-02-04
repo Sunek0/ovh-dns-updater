@@ -50,7 +50,7 @@ The project uses `node-config`. Configuration is merged from `config/default.yam
 | :--- | :--- | :--- |
 | `server.port` | HTTP Port | `3000` |
 | `server.logLevel` | Logging level (pino) | `info` |
-| `security.adminToken` | Master token for API access | `changeme` |
+| `security.apiKey` | Master token for API access | `changeme` |
 | `scheduler.enabled` | Enable background checks | `true` |
 | `scheduler.intervalMs` | Interval between checks | `600000` (10m) |
 | `ondemand.enabled` | Enable the REST API | `true` |
@@ -86,12 +86,12 @@ All on-demand routes are prefixed with `/api`.
 - `GET /health`: Liveness check.
 - `GET /api/public-ip`: Returns the currently detected public IP.
 
-### Management (Requires `Authorization: Bearer <adminToken>`)
+### Management (Requires `Authorization: Bearer <apiKey>`)
 - `POST /api/sync`: Force a check and update for all enabled accounts.
 - `POST /api/accounts/:id/sync`: Sync only a specific account.
 
 ### Legacy / Mikrotik (Requires valid `:token` in path)
-Compatible with devices that can only perform GET requests. The `:token` can be either the `adminToken` or the specific account `token`.
+Compatible with devices that can only perform GET requests. The `:token` can be either the `apiKey` or the specific account `token`.
 
 - `GET /api/:token/checkip`: Trigger a global sync.
 - `GET /api/:token/setip/:ip`: Force a specific IP update for all accounts.
