@@ -50,10 +50,13 @@ The project uses `node-config`. Configuration is merged from `config/default.yam
 | :--- | :--- | :--- |
 | `server.port` | HTTP Port | `3000` |
 | `server.logLevel` | Logging level (pino) | `info` |
-| `security.apiKey` | Master token for API access | `changeme` |
+| `security.apiKey` | Master token for API access | `change-me` |
 | `scheduler.enabled` | Enable background checks | `true` |
-| `scheduler.intervalMs` | Interval between checks | `600000` (10m) |
+| `scheduler.interval` | Interval between checks (seconds) | `600` (10m) |
 | `ondemand.enabled` | Enable the REST API | `true` |
+
+> **Security:** change `security.apiKey` before exposing the service. The default
+> value is only a placeholder and must not be used in production.
 
 ### Account Configuration
 
@@ -109,7 +112,7 @@ pnpm start
 ### Docker
 ```bash
 docker build -t ovh-dns-updater-ng .
-docker run -p 3000:3000 -v ./config:/app/config ovh-dns-updater-ng
+docker run -p 3000:3000 -v ./config:/usr/src/app/config ovh-dns-updater-ng
 ```
 
 ## Testing
@@ -117,6 +120,7 @@ docker run -p 3000:3000 -v ./config:/app/config ovh-dns-updater-ng
 The project maintains high coverage (90%+) using Vitest.
 
 ```bash
+pnpm typecheck     # Type-check source and tests
 pnpm test          # Run tests
 pnpm test:coverage # Generate coverage report
 ```

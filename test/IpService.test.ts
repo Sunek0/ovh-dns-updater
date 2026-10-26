@@ -76,4 +76,15 @@ describe('IpService', () => {
     // If all providers return bad IP
     await expect(service.getPublicIp()).rejects.toThrow();
   });
+
+  it('should reject out-of-range IPv4 octets', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: async () => '999.999.999.999',
+    });
+
+    const service = new IpService(providers, mockLogger);
+
+    await expect(service.getPublicIp()).rejects.toThrow('Could not determine public IP');
+  });
 });

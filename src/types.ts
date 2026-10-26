@@ -12,6 +12,7 @@ export interface OvhCredentials {
   appKey: string;
   appSecret: string;
   consumerKey: string;
+  timeout?: number; // milliseconds, defaults to 30000
 }
 
 export interface AccountConfig {

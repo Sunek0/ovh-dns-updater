@@ -1,4 +1,5 @@
 import { FastifyBaseLogger } from 'fastify';
+import { isValidIPv4 } from '../utils/ip.js';
 
 export class IpService {
   private providers: string[];
@@ -24,9 +25,8 @@ export class IpService {
 
         const ip = (await response.text()).trim();
         
-        // Basic IPv4 validation
-        if (!/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip)) {
-           throw new Error(`Invalid IP format received: ${ip}`);
+        if (!isValidIPv4(ip)) {
+          throw new Error(`Invalid IP format received: ${ip}`);
         }
 
         this.logger.info({ provider, ip }, 'Public IP detected');

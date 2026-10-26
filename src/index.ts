@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { LogController } from 'fastify';
 import config from 'config';
 import { AppConfig } from './types.js';
 import servicesPlugin from './plugins/services.js';
@@ -21,7 +21,7 @@ const start = async () => {
       },
       level: loggerLevel,
     },
-    disableRequestLogging: true, // Optional: more clean logs for this type of app
+    logController: new LogController({ disableRequestLogging: true }),
   });
 
   try {
@@ -47,6 +47,20 @@ const start = async () => {
     const address = await fastify.listen({ port, host });
 
     fastify.log.info(`Server listening at ${address}`);
+
+    const shutdown = async (signal: NodeJS.Signals) => {
+      fastify.log.info({ signal }, 'Shutting down');
+      try {
+        await fastify.close();
+        process.exit(0);
+      } catch (err) {
+        fastify.log.error(err);
+        process.exit(1);
+      }
+    };
+
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

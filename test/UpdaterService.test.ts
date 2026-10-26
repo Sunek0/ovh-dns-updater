@@ -76,6 +76,13 @@ describe('UpdaterService', () => {
     expect(result.results['acc3']).toBe('Success');
   });
 
+  it('should report account existence', () => {
+    const service = new UpdaterService(config, mockIpService, mockLogger);
+    expect(service.hasAccount('acc1')).toBe(true);
+    expect(service.hasAccount('acc2')).toBe(false);
+    expect(service.hasAccount('non-existent')).toBe(false);
+  });
+
   it('should fail to sync non-existent account', async () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
     await expect(service.syncAccount('non-existent')).rejects.toThrow('Account non-existent not found');

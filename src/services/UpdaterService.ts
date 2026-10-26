@@ -64,6 +64,10 @@ export class UpdaterService {
     return { ip: currentIp, results };
   }
 
+  hasAccount(accountId: string): boolean {
+    return this.accounts.has(accountId);
+  }
+
   async syncAccount(accountId: string): Promise<string> {
     const account = this.accounts.get(accountId);
     if (!account) {

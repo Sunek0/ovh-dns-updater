@@ -16,7 +16,8 @@ describe('API Routes', () => {
         // Mock UpdaterService on the instance (consistent with src/routes/api.ts using fastify.updaterService)
         app.decorate('updaterService', {
             syncAll: mockSyncAll,
-            syncAccount: mockSyncAccount
+            syncAccount: mockSyncAccount,
+            hasAccount: vi.fn().mockReturnValue(true)
         });
 
         // Mock config for auth logic
@@ -51,6 +52,14 @@ describe('API Routes', () => {
     it('GET /api/:token/checkip should fail with wrong token', async () => {
         const res = await request(app.server).get('/api/wrong-token/checkip');
         expect(res.status).toBe(401);
+        expect(mockSyncAll).not.toHaveBeenCalled();
+    });
+
+    it('GET /api/:token/setip/:ip should reject an invalid IP', async () => {
+        const res = await request(app.server).get('/api/legacy-token/setip/999.999.999.999');
+        expect(res.status).toBe(400);
+        expect(res.body.error).toBe('Invalid IPv4 address');
+        expect(mockSyncAll).not.toHaveBeenCalled();
     });
 
     it('GET /api/public-ip should return public ip', async () => {
@@ -70,6 +79,18 @@ describe('API Routes', () => {
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('1.1.1.1');
         expect(mockSyncAccount).toHaveBeenCalledWith('acc1');
+    });
+
+    it('POST /api/accounts/:id/sync should return 404 for an unknown account', async () => {
+        app.updaterService.hasAccount.mockReturnValue(false);
+
+        const res = await request(app.server)
+            .post('/api/accounts/does-not-exist/sync')
+            .set('Authorization', 'Bearer master-token');
+
+        expect(res.status).toBe(404);
+        expect(res.body.error).toBe('Account not found');
+        expect(mockSyncAccount).not.toHaveBeenCalled();
     });
 
     it('GET /api/:token/setip/:ip should work with legacy token', async () => {

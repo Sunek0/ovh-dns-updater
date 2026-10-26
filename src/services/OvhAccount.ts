@@ -16,6 +16,7 @@ export class OvhAccount {
       appKey: config.credentials.appKey,
       appSecret: config.credentials.appSecret,
       consumerKey: config.credentials.consumerKey,
+      timeout: config.credentials.timeout ?? 30000,
     });
   }
 

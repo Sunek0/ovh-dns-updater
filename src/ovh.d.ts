@@ -4,6 +4,7 @@ declare module 'ovh' {
     appKey: string;
     appSecret: string;
     consumerKey: string;
+    timeout?: number;
   }
 
   export interface OvhClient {

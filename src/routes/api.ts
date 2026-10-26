@@ -1,4 +1,5 @@
 import { FastifyPluginAsync } from 'fastify';
+import { isValidIPv4 } from '../utils/ip.js';
 
 const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
   
@@ -45,7 +46,11 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     return result;
   });
 
-  fastify.post<{ Params: { id: string } }>('/accounts/:id/sync', async (req, _res) => {
+  fastify.post<{ Params: { id: string } }>('/accounts/:id/sync', async (req, reply) => {
+    if (!fastify.updaterService.hasAccount(req.params.id)) {
+      return reply.code(404).send({ error: 'Account not found' });
+    }
+
     req.log.info(`Received sync request for account: ${req.params.id}`);
     const ip = await fastify.updaterService.syncAccount(req.params.id);
     return { message: 'Synced', ip };
@@ -57,7 +62,11 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     return result;
   });
 
-  fastify.get<{ Params: { token: string; ip: string } }>('/:token/setip/:ip', async (req, _res) => {
+  fastify.get<{ Params: { token: string; ip: string } }>('/:token/setip/:ip', async (req, reply) => {
+    if (!isValidIPv4(req.params.ip)) {
+      return reply.code(400).send({ error: 'Invalid IPv4 address' });
+    }
+
     req.log.info(`Received setip request with IP: ${req.params.ip}`);
     const result = await fastify.updaterService.syncAll(true, req.params.ip);
     return result;
