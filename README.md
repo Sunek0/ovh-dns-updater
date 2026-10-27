@@ -64,7 +64,7 @@ does not include secret values.
 | `ondemand.enabled` | Enable the REST API | `true` |
 | `ui.enabled` | Serve the web UI and its status API | `true` |
 | `ui.historySize` | Events kept in the in-memory circular buffer | `500` |
-| `ui.refreshSeconds` | Polling interval used by the web UI | `10` |
+| `ui.refreshSeconds` | Fallback polling interval used when SSE is unavailable | `10` |
 
 > **Security:** change `security.apiKey` before exposing the service. The default
 > value is only a placeholder and must not be used in production.
@@ -193,24 +193,35 @@ Internet y se adapta a móvil y a modo oscuro (`prefers-color-scheme`).
   cuenta con sus registros y un timeline filtrable de eventos.
 - Si `ondemand.enabled` es `true`, aparece el botón **Comprobar ahora**, que usa
   el endpoint existente `POST /api/sync`.
-- El polling se pausa cuando la pestaña no está visible y usa
-  `ui.refreshSeconds` (10 s por defecto).
+- Las actualizaciones llegan por **SSE** desde `GET /api/stream`, autenticado
+  con Bearer. El navegador usa `fetch` en streaming (no `EventSource`) para poder
+  enviar la cabecera `Authorization` sin poner la API key en la URL.
+- El stream envía un bootstrap al conectar y después snapshots consolidados y
+  eventos incrementales. Se reconecta con backoff y, si no está disponible,
+  vuelve automáticamente al polling REST cada `ui.refreshSeconds`.
+- El uptime, los tiempos relativos y la cuenta atrás se actualizan localmente
+  cada segundo; no dependen de que llegue un evento SSE.
+- Al ocultar la pestaña se cierra la conexión SSE; al volver a mostrarla se
+  reconecta y se recibe un nuevo bootstrap.
 
 Todo el estado de la UI vive en memoria: no hay base de datos ni ficheros. Al
 reiniciar el proceso se pierde el historial y los valores iniciales se vuelven
 a leer desde OVH en la primera sincronización. El buffer de eventos conserva
 como máximo `ui.historySize` entradas.
 
-`ui.enabled: false` desactiva la interfaz y también `/api/status` y
-`/api/events`. El updater, el scheduler y la API on-demand siguen funcionando
-con normalidad. Los secretos de OVH (`appKey`, `appSecret`, `consumerKey`) y la
-`apiKey` nunca forman parte del snapshot ni del historial.
+`ui.enabled: false` desactiva la interfaz y también `/api/status`,
+`/api/events` y `/api/stream`. El updater, el scheduler y la API on-demand
+siguen funcionando con normalidad. Los secretos de OVH (`appKey`, `appSecret`,
+`consumerKey`) y la `apiKey` nunca forman parte del snapshot ni del historial.
+
+Si la UI está detrás de un proxy inverso, desactiva el buffering para
+`/api/stream` (por ejemplo, `proxy_buffering off` en Nginx).
 
 ## API Reference
 
-On-demand routes are prefixed with `/api`. The UI status/events endpoints are
-also under `/api` and are served when `ui.enabled` is `true`, independently of
-whether on-demand updates are enabled.
+On-demand routes are prefixed with `/api`. The UI status, event and streaming
+endpoints are also under `/api` and are served when `ui.enabled` is `true`,
+independently of whether on-demand updates are enabled.
 
 ### Public Endpoints
 - `GET /`: Static web UI (when `ui.enabled` is `true`).
@@ -222,12 +233,17 @@ whether on-demand updates are enabled.
 - `GET /api/events?limit=&account=&domain=&type=`: Event history. `type` accepts
   `updated`, `unchanged`, `error` or `public_ip_changed`. Results are returned
   newest first and `limit` defaults to 100.
+- `GET /api/stream?limit=&account=&domain=&type=`: Server-Sent Events stream.
+  It first sends a `bootstrap` event with the snapshot and filtered history,
+  then `update` events with a consolidated snapshot and new events, plus
+  periodic `heartbeat` events. The same filters as `/api/events` apply.
 - `POST /api/sync`: Force a check and update for all enabled accounts.
 - `POST /api/accounts/:id/sync`: Sync only a specific account.
 
 `/api/*` responses include `Cache-Control: no-store` and
-`X-Content-Type-Options: nosniff`. The status snapshot never includes OVH
-credentials, account tokens or the master API key.
+`X-Content-Type-Options: nosniff`. The SSE response uses
+`Cache-Control: no-store, no-transform` and `X-Accel-Buffering: no`. The status
+snapshot never includes OVH credentials, account tokens or the master API key.
 
 Sync responses include `results` with a per-account summary (`Success`, `Partial`,
 `Failed`) and `details` with the per-domain/per-subdomain outcome.

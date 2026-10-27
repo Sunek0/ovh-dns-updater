@@ -3,6 +3,7 @@
 const STORAGE_KEY = 'ovh-dns-updater.apiKey';
 const DEFAULT_REFRESH_MS = 10000;
 const EVENTS_LIMIT = 100;
+const STREAM_RETRY_DELAYS = [1000, 2000, 5000, 10000];
 
 const STATUS_LABELS = {
   pending: 'Pendiente',
@@ -33,13 +34,22 @@ const ACTION_LABELS = {
 const state = {
   apiKey: readStoredKey(),
   snapshot: null,
+  snapshotReceivedAt: null,
   events: [],
+  eventsTotal: 0,
   refreshMs: DEFAULT_REFRESH_MS,
   lastUpdatedAt: null,
   loading: false,
   syncing: false,
   pollTimer: null,
+  reconnectTimer: null,
   tickTimer: null,
+  streamController: null,
+  streamConnected: false,
+  streamState: 'idle',
+  streamAttempts: 0,
+  lastStreamActivityAt: null,
+  pollingFallback: false,
   visible: !document.hidden,
   filters: {
     account: '',
@@ -214,8 +224,10 @@ function setTimeElement(element, iso, emptyText = '—') {
   if (!iso) {
     element.textContent = emptyText;
     element.removeAttribute('title');
+    delete element.dataset.relativeIso;
     return;
   }
+  element.dataset.relativeIso = iso;
   element.textContent = formatRelative(iso);
   element.title = formatDate(iso);
 }
@@ -246,7 +258,11 @@ function hideBanner() {
 }
 
 function showLogin(message = '', clearInput = true) {
+  stopStream();
   stopTimers();
+  state.streamState = 'idle';
+  state.streamAttempts = 0;
+  state.pollingFallback = false;
   dom.app.hidden = true;
   dom.login.hidden = false;
   setLoginError(message);
@@ -260,13 +276,32 @@ function showApp() {
 }
 
 function updateLastUpdatedLabel() {
+  dom.lastUpdated.className = 'last-updated';
+
+  if (!state.apiKey) {
+    dom.lastUpdated.textContent = '';
+    return;
+  }
+
   if (state.loading) {
     dom.lastUpdated.textContent = 'Actualizando…';
     return;
   }
 
+  if (state.streamState === 'connecting') {
+    dom.lastUpdated.textContent = 'Conectando…';
+    return;
+  }
+
+  if (state.streamState === 'reconnecting') {
+    dom.lastUpdated.textContent = 'Reconectando…';
+    return;
+  }
+
   if (!state.lastUpdatedAt) {
-    dom.lastUpdated.textContent = state.apiKey ? 'Conectando…' : '';
+    dom.lastUpdated.textContent = state.streamState === 'connected'
+      ? 'En directo'
+      : 'Conectando…';
     return;
   }
 
@@ -275,25 +310,76 @@ function updateLastUpdatedLabel() {
     Math.floor((Date.now() - state.lastUpdatedAt) / 1000),
   );
 
+  let relative;
   if (seconds < 60) {
-    dom.lastUpdated.textContent = `Actualizado hace ${seconds} s`;
+    relative = `hace ${seconds} s`;
   } else if (seconds < 3600) {
-    dom.lastUpdated.textContent = `Actualizado hace ${Math.floor(seconds / 60)} min`;
+    relative = `hace ${Math.floor(seconds / 60)} min`;
   } else {
-    dom.lastUpdated.textContent = `Actualizado hace ${Math.floor(seconds / 3600)} h`;
+    relative = `hace ${Math.floor(seconds / 3600)} h`;
+  }
+
+  if (state.streamState === 'connected') {
+    dom.lastUpdated.classList.add('is-live');
+    dom.lastUpdated.textContent = `En directo · actualizado ${relative}`;
+    return;
+  }
+
+  if (state.streamState === 'polling') {
+    dom.lastUpdated.classList.add('is-polling');
+    dom.lastUpdated.textContent = `Respaldo · actualizado ${relative}`;
+    return;
+  }
+
+  dom.lastUpdated.textContent = `Actualizado ${relative}`;
+}
+
+function refreshRelativeTimes() {
+  for (const element of document.querySelectorAll('[data-relative-iso]')) {
+    const iso = element.dataset.relativeIso;
+    if (iso) element.textContent = formatRelative(iso);
+  }
+}
+
+function refreshUptime() {
+  if (!state.snapshot) return;
+  const elapsed = state.snapshotReceivedAt
+    ? Math.max(0, Math.floor((Date.now() - state.snapshotReceivedAt) / 1000))
+    : 0;
+  const uptime = (Number(state.snapshot.uptimeSeconds) || 0) + elapsed;
+  dom.uptime.textContent = formatUptime(uptime);
+}
+
+function refreshClock() {
+  updateLastUpdatedLabel();
+  refreshRelativeTimes();
+  refreshUptime();
+  if (state.snapshot) renderProviderInfo(state.snapshot);
+
+  if (
+    state.streamState === 'connected' &&
+    state.lastStreamActivityAt &&
+    Date.now() - state.lastStreamActivityAt > 45_000
+  ) {
+    state.lastStreamActivityAt = null;
+    stopStream();
+    handleStreamFailure();
   }
 }
 
 function startTickTimer() {
   if (state.tickTimer || !state.visible) return;
-  state.tickTimer = window.setInterval(updateLastUpdatedLabel, 1000);
+  state.tickTimer = window.setInterval(refreshClock, 1000);
+}
+
+function clearPollTimer() {
+  if (!state.pollTimer) return;
+  window.clearTimeout(state.pollTimer);
+  state.pollTimer = null;
 }
 
 function stopTimers() {
-  if (state.pollTimer) {
-    window.clearTimeout(state.pollTimer);
-    state.pollTimer = null;
-  }
+  clearPollTimer();
   if (state.tickTimer) {
     window.clearInterval(state.tickTimer);
     state.tickTimer = null;
@@ -301,16 +387,14 @@ function stopTimers() {
 }
 
 function schedulePoll() {
-  if (state.pollTimer) {
-    window.clearTimeout(state.pollTimer);
-    state.pollTimer = null;
-  }
+  clearPollTimer();
 
-  if (!state.apiKey || !state.visible) return;
+  if (!state.apiKey || !state.visible || !state.pollingFallback) return;
 
-  state.pollTimer = window.setTimeout(() => {
+  state.pollTimer = window.setTimeout(async () => {
     state.pollTimer = null;
-    void refreshData();
+    await refreshData();
+    if (state.pollingFallback) schedulePoll();
   }, state.refreshMs);
 }
 
@@ -341,20 +425,30 @@ async function apiFetch(path, options = {}) {
   return response.json();
 }
 
-function buildEventsUrl() {
+function buildFilteredUrl(path) {
   const params = new URLSearchParams();
   params.set('limit', String(EVENTS_LIMIT));
   if (state.filters.account) params.set('account', state.filters.account);
   if (state.filters.domain) params.set('domain', state.filters.domain);
   if (state.filters.type) params.set('type', state.filters.type);
-  return `/api/events?${params.toString()}`;
+  return `${path}?${params.toString()}`;
+}
+
+function buildEventsUrl() {
+  return buildFilteredUrl('/api/events');
+}
+
+function buildStreamUrl() {
+  return buildFilteredUrl('/api/stream');
 }
 
 function handleApiError(error) {
   if (error instanceof ApiError && error.status === 401) {
     state.apiKey = '';
     state.snapshot = null;
+    state.snapshotReceivedAt = null;
     state.events = [];
+    state.eventsTotal = 0;
     state.lastUpdatedAt = null;
     clearStoredKey();
     showLogin('La API key no es válida. Vuelve a introducirla.');
@@ -362,20 +456,31 @@ function handleApiError(error) {
   }
 
   const message = error instanceof Error ? error.message : String(error);
+  const text = `No se pudo actualizar el estado: ${message}`;
 
   if (dom.app.hidden) {
     setLoginError(`No se pudo conectar con el servidor: ${message}`);
   } else {
-    showBanner(`No se pudo actualizar el estado: ${message}`);
+    showBanner(text);
   }
+}
+
+function updateRefreshMs(snapshot) {
+  const refreshSeconds = Number(snapshot.ui && snapshot.ui.refreshSeconds);
+  state.refreshMs = Number.isFinite(refreshSeconds) && refreshSeconds > 0
+    ? Math.min(Math.max(refreshSeconds, 1), 3600) * 1000
+    : DEFAULT_REFRESH_MS;
+}
+
+function setSnapshot(snapshot) {
+  state.snapshot = snapshot;
+  state.snapshotReceivedAt = Date.now();
+  updateRefreshMs(snapshot);
 }
 
 async function refreshData({ initial = false } = {}) {
   if (!state.apiKey) return false;
-  if (state.loading) {
-    schedulePoll();
-    return false;
-  }
+  if (state.loading) return false;
   if (!state.visible && !initial) return false;
 
   state.loading = true;
@@ -387,12 +492,7 @@ async function refreshData({ initial = false } = {}) {
   try {
     const snapshot = await apiFetch('/api/status');
     if (state.apiKey !== requestKey) return false;
-    state.snapshot = snapshot;
-
-    const refreshSeconds = Number(snapshot.ui && snapshot.ui.refreshSeconds);
-    state.refreshMs = Number.isFinite(refreshSeconds) && refreshSeconds > 0
-      ? Math.min(Math.max(refreshSeconds, 1), 3600) * 1000
-      : DEFAULT_REFRESH_MS;
+    setSnapshot(snapshot);
 
     renderSnapshot(snapshot);
 
@@ -400,7 +500,8 @@ async function refreshData({ initial = false } = {}) {
       const eventsPayload = await apiFetch(buildEventsUrl());
       if (state.apiKey !== requestKey) return false;
       state.events = Array.isArray(eventsPayload.events) ? eventsPayload.events : [];
-      renderEvents(Number(eventsPayload.total) || 0);
+      state.eventsTotal = Number(eventsPayload.total) || 0;
+      renderEvents(state.eventsTotal);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) throw error;
       const message = error instanceof Error ? error.message : String(error);
@@ -413,15 +514,268 @@ async function refreshData({ initial = false } = {}) {
     storeKey(state.apiKey);
     showApp();
     startTickTimer();
-    updateLastUpdatedLabel();
+    refreshClock();
     return true;
   } catch (error) {
     handleApiError(error);
     return false;
   } finally {
     state.loading = false;
-    updateLastUpdatedLabel();
-    schedulePoll();
+    refreshClock();
+  }
+}
+
+function parseSseFrame(raw) {
+  let eventName = 'message';
+  const dataLines = [];
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith(':')) continue;
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).replace(/^ /, ''));
+    }
+  }
+
+  if (dataLines.length === 0) return null;
+
+  try {
+    return {
+      event: eventName,
+      data: JSON.parse(dataLines.join('\n')),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function readSseStream(body, onFrame) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const raw = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const frame = parseSseFrame(raw);
+        if (frame) onFrame(frame);
+        boundary = buffer.indexOf('\n\n');
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      const frame = parseSseFrame(buffer);
+      if (frame) onFrame(frame);
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // The reader may already be released after an abort.
+    }
+  }
+}
+
+function applyStreamSnapshot(snapshot) {
+  setSnapshot(snapshot);
+  state.streamState = 'connected';
+  state.streamConnected = true;
+  state.streamAttempts = 0;
+  state.pollingFallback = false;
+  clearPollTimer();
+  state.lastUpdatedAt = Date.now();
+  renderSnapshot(snapshot);
+  hideBanner();
+  storeKey(state.apiKey);
+  showApp();
+  startTickTimer();
+}
+
+function applyBootstrap(payload) {
+  if (!payload || !payload.snapshot) return false;
+
+  state.events = Array.isArray(payload.events)
+    ? payload.events.slice(0, EVENTS_LIMIT)
+    : [];
+  state.eventsTotal = Number.isFinite(Number(payload.total))
+    ? Number(payload.total)
+    : state.events.length;
+
+  applyStreamSnapshot(payload.snapshot);
+  renderEvents(state.eventsTotal);
+  refreshClock();
+  return true;
+}
+
+function applyUpdate(payload) {
+  if (!payload || !payload.snapshot) return false;
+
+  const incoming = Array.isArray(payload.events) ? payload.events : [];
+  if (incoming.length > 0) {
+    const known = new Set(state.events.map(event => event.id));
+    const fresh = incoming.filter(event => !known.has(event.id));
+    if (fresh.length > 0) {
+      state.events = [...fresh, ...state.events]
+        .sort((left, right) => right.id - left.id)
+        .slice(0, EVENTS_LIMIT);
+    }
+  }
+
+  if (Number.isFinite(Number(payload.total))) {
+    state.eventsTotal = Number(payload.total);
+  }
+
+  applyStreamSnapshot(payload.snapshot);
+  renderEvents(state.eventsTotal);
+  refreshClock();
+  return true;
+}
+
+function stopStream() {
+  if (state.streamController) {
+    state.streamController.abort();
+    state.streamController = null;
+  }
+  if (state.reconnectTimer) {
+    window.clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = null;
+  }
+  state.streamConnected = false;
+  state.lastStreamActivityAt = null;
+}
+
+function startPollingFallback() {
+  if (!state.apiKey || !state.visible) return;
+
+  stopStream();
+  state.pollingFallback = true;
+  state.streamState = 'polling';
+  updateLastUpdatedLabel();
+
+  void refreshData({ initial: true }).then(() => {
+    if (state.pollingFallback) schedulePoll();
+  });
+}
+
+function handleStreamFailure() {
+  if (!state.apiKey || !state.visible) return;
+
+  state.streamConnected = false;
+  state.streamAttempts += 1;
+
+  if (state.streamAttempts > STREAM_RETRY_DELAYS.length) {
+    startPollingFallback();
+    return;
+  }
+
+  state.streamState = 'reconnecting';
+  updateLastUpdatedLabel();
+
+  const delay = STREAM_RETRY_DELAYS[state.streamAttempts - 1];
+  state.reconnectTimer = window.setTimeout(() => {
+    state.reconnectTimer = null;
+    void startLiveUpdates();
+  }, delay);
+}
+
+async function startLiveUpdates() {
+  if (!state.apiKey || !state.visible) return;
+
+  stopStream();
+  const controller = new AbortController();
+  state.streamController = controller;
+  state.streamState = 'connecting';
+  state.streamConnected = false;
+  state.pollingFallback = false;
+  clearPollTimer();
+  updateLastUpdatedLabel();
+
+  let bootstrapTimer = null;
+  let bootstrapTimedOut = false;
+
+  const clearBootstrapTimer = () => {
+    if (!bootstrapTimer) return;
+    window.clearTimeout(bootstrapTimer);
+    bootstrapTimer = null;
+  };
+
+  bootstrapTimer = window.setTimeout(() => {
+    bootstrapTimedOut = true;
+    controller.abort();
+  }, 5000);
+
+  try {
+    const response = await fetch(buildStreamUrl(), {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${state.apiKey}`,
+        Accept: 'text/event-stream',
+      },
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+
+    if (controller.signal.aborted) return;
+
+    if (response.status === 401) {
+      handleApiError(new ApiError('Unauthorized', 401));
+      return;
+    }
+    if (!response.ok) {
+      throw new ApiError(`Error HTTP ${response.status}`, response.status);
+    }
+    if (!response.body) {
+      throw new Error('El servidor no devolvió un stream');
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+      throw new Error('El servidor no devolvió un stream SSE');
+    }
+
+    await readSseStream(response.body, frame => {
+      if (state.streamController !== controller || controller.signal.aborted) {
+        return;
+      }
+
+      state.lastStreamActivityAt = Date.now();
+
+      if (frame.event === 'bootstrap') {
+        if (applyBootstrap(frame.data)) clearBootstrapTimer();
+      } else if (frame.event === 'update') {
+        if (applyUpdate(frame.data)) clearBootstrapTimer();
+      } else if (frame.event === 'heartbeat') {
+        clearBootstrapTimer();
+      }
+    });
+
+    if (!controller.signal.aborted) {
+      throw new Error('El stream en directo se cerró');
+    }
+  } catch (error) {
+    if (controller.signal.aborted && !bootstrapTimedOut) return;
+    if (state.streamController !== controller) return;
+
+    if (error instanceof ApiError && error.status === 401) {
+      handleApiError(error);
+      return;
+    }
+
+    handleStreamFailure();
+  } finally {
+    clearBootstrapTimer();
+    if (state.streamController === controller) {
+      state.streamController = null;
+    }
   }
 }
 
@@ -429,11 +783,6 @@ function renderSnapshot(snapshot) {
   const scheduler = snapshot.scheduler || { enabled: false, intervalSeconds: 0 };
   const ondemand = snapshot.ondemand || { enabled: false };
   const counters = snapshot.counters || { checks: 0, updates: 0, errors: 0 };
-  const providerInfo = snapshot.ipProvider || {
-    provider: null,
-    lastDetectionAt: null,
-    failures: [],
-  };
 
   dom.currentIp.textContent = textOrDash(snapshot.currentIp);
   dom.initialIp.textContent = textOrDash(snapshot.initialIp);
@@ -474,24 +823,7 @@ function renderSnapshot(snapshot) {
   );
   dom.uptime.textContent = formatUptime(snapshot.uptimeSeconds);
 
-  const failures = Array.isArray(providerInfo.failures) ? providerInfo.failures : [];
-  dom.ipProvider.textContent = providerInfo.provider
-    ? providerLabel(providerInfo.provider)
-    : providerInfo.lastDetectionAt ? 'Ninguno' : '—';
-  dom.ipProvider.title = providerInfo.provider || '';
-
-  if (!providerInfo.lastDetectionAt) {
-    dom.ipProviderMeta.textContent = 'Sin detecciones todavía';
-    dom.ipProviderMeta.title = '';
-  } else {
-    const detection = `Detección ${formatRelative(providerInfo.lastDetectionAt)}`;
-    dom.ipProviderMeta.textContent = failures.length > 0
-      ? `${failures.length} ${failures.length === 1 ? 'fallo' : 'fallos'} · ${detection}`
-      : detection;
-    dom.ipProviderMeta.title = failures
-      .map(failure => `${providerLabel(failure.provider)}: ${failure.error}`)
-      .join('\n');
-  }
+  renderProviderInfo(snapshot);
 
   setChip(
     dom.schedulerState,
@@ -513,6 +845,33 @@ function renderSnapshot(snapshot) {
 
   renderAccounts(Array.isArray(snapshot.accounts) ? snapshot.accounts : []);
   renderFilters(Array.isArray(snapshot.accounts) ? snapshot.accounts : []);
+}
+
+function renderProviderInfo(snapshot) {
+  const providerInfo = snapshot.ipProvider || {
+    provider: null,
+    lastDetectionAt: null,
+    failures: [],
+  };
+  const failures = Array.isArray(providerInfo.failures) ? providerInfo.failures : [];
+
+  dom.ipProvider.textContent = providerInfo.provider
+    ? providerLabel(providerInfo.provider)
+    : providerInfo.lastDetectionAt ? 'Ninguno' : '—';
+  dom.ipProvider.title = providerInfo.provider || '';
+
+  if (!providerInfo.lastDetectionAt) {
+    dom.ipProviderMeta.textContent = 'Sin detecciones todavía';
+    dom.ipProviderMeta.title = '';
+  } else {
+    const detection = `Detección ${formatRelative(providerInfo.lastDetectionAt)}`;
+    dom.ipProviderMeta.textContent = failures.length > 0
+      ? `${failures.length} ${failures.length === 1 ? 'fallo' : 'fallos'} · ${detection}`
+      : detection;
+    dom.ipProviderMeta.title = failures
+      .map(failure => `${providerLabel(failure.provider)}: ${failure.error}`)
+      .join('\n');
+  }
 }
 
 function renderAccounts(accounts) {
@@ -638,6 +997,7 @@ function timeCell(iso) {
   const time = el('time', 'time-value');
   if (iso) {
     time.dateTime = iso;
+    time.dataset.relativeIso = iso;
     time.textContent = formatRelative(iso);
     time.title = formatDate(iso);
   } else {
@@ -688,9 +1048,10 @@ function renderEvents(total) {
     return;
   }
 
-  dom.eventsCount.textContent = total > state.events.length
-    ? `Mostrando ${state.events.length} de ${total}`
-    : `${total} ${total === 1 ? 'evento' : 'eventos'}`;
+  const totalCount = Math.max(Number(total) || 0, state.events.length);
+  dom.eventsCount.textContent = totalCount > state.events.length
+    ? `Mostrando ${state.events.length} de ${totalCount}`
+    : `${state.events.length} ${state.events.length === 1 ? 'evento' : 'eventos'}`;
 
   for (const event of state.events) {
     const item = el('li', `event event-${event.action}`);
@@ -706,6 +1067,7 @@ function renderEvents(total) {
     ));
     const time = el('time', 'event-time');
     time.dateTime = event.timestamp;
+    time.dataset.relativeIso = event.timestamp;
     time.textContent = formatRelative(event.timestamp);
     time.title = formatDate(event.timestamp);
     head.append(time);
@@ -763,8 +1125,9 @@ async function syncNow() {
     dom.syncNow.textContent = 'Comprobar ahora';
   }
 
-  if (state.apiKey) {
+  if (state.apiKey && state.pollingFallback) {
     await refreshData({ initial: true });
+    if (state.pollingFallback) schedulePoll();
   }
 }
 
@@ -772,15 +1135,20 @@ function onVisibilityChange() {
   state.visible = !document.hidden;
 
   if (!state.visible) {
+    stopStream();
     stopTimers();
+    state.streamState = 'idle';
+    state.pollingFallback = false;
     return;
   }
 
   if (!state.apiKey) return;
 
+  state.streamAttempts = 0;
+  state.pollingFallback = false;
   startTickTimer();
-  updateLastUpdatedLabel();
-  void refreshData();
+  refreshClock();
+  void startLiveUpdates();
 }
 
 async function onLogin(event) {
@@ -800,6 +1168,9 @@ async function onLogin(event) {
 
   try {
     await refreshData({ initial: true });
+    if (state.apiKey) {
+      void startLiveUpdates();
+    }
   } finally {
     dom.loginSubmit.disabled = false;
     dom.loginSubmit.textContent = 'Entrar';
@@ -809,11 +1180,30 @@ async function onLogin(event) {
 function onChangeKey() {
   state.apiKey = '';
   state.snapshot = null;
+  state.snapshotReceivedAt = null;
   state.events = [];
+  state.eventsTotal = 0;
   state.lastUpdatedAt = null;
   clearStoredKey();
   hideBanner();
   showLogin();
+}
+
+function onFiltersChanged() {
+  if (state.snapshot) {
+    renderFilters(state.snapshot.accounts || []);
+  }
+
+  if (!state.apiKey) return;
+
+  if (state.pollingFallback) {
+    void refreshData().then(() => {
+      if (state.pollingFallback) schedulePoll();
+    });
+    return;
+  }
+
+  void startLiveUpdates();
 }
 
 function init() {
@@ -828,21 +1218,25 @@ function init() {
   dom.filterAccount.addEventListener('change', () => {
     state.filters.account = dom.filterAccount.value;
     if (state.snapshot) renderFilters(state.snapshot.accounts || []);
-    void refreshData();
+    onFiltersChanged();
   });
   dom.filterDomain.addEventListener('change', () => {
     state.filters.domain = dom.filterDomain.value;
-    void refreshData();
+    onFiltersChanged();
   });
   dom.filterType.addEventListener('change', () => {
     state.filters.type = dom.filterType.value;
-    void refreshData();
+    onFiltersChanged();
   });
   document.addEventListener('visibilitychange', onVisibilityChange);
 
   if (state.apiKey) {
     updateLastUpdatedLabel();
-    void refreshData({ initial: true });
+    void refreshData({ initial: true }).then(() => {
+      if (state.apiKey) {
+        void startLiveUpdates();
+      }
+    });
   } else {
     showLogin();
   }

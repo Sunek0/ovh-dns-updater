@@ -182,9 +182,39 @@ code,
 }
 
 .last-updated {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   color: var(--muted);
   font-size: 0.8rem;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.last-updated::before {
+  content: "";
+  width: 0.45rem;
+  height: 0.45rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.55;
+}
+
+.last-updated:empty::before {
+  display: none;
+}
+
+.last-updated.is-live::before {
+  background: var(--ok);
+  opacity: 1;
+  box-shadow: 0 0 0 0.18rem var(--ok-soft);
+}
+
+.last-updated.is-polling::before {
+  background: var(--warn);
+  opacity: 1;
+  box-shadow: 0 0 0 0.18rem var(--warn-soft);
 }
 
 .layout {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SubdomainSyncResult } from '../src/types.js';
 import { StateStore } from '../src/services/StateStore.js';
 
@@ -438,5 +438,42 @@ describe('StateStore', () => {
         message: 'Zone refresh failed',
       }),
     );
+  });
+
+  it('notifies subscribers, isolates listener failures and supports unsubscribe', () => {
+    const store = new StateStore({
+      now: () => T0,
+      accounts: [{ id: 'acc1', domains: [{ name: 'example.com', subdomains: ['@'] }] }],
+    });
+    const throwingListener = vi.fn(() => {
+      throw new Error('listener exploded');
+    });
+    const listener = vi.fn();
+
+    store.subscribe(throwingListener);
+    const unsubscribe = store.subscribe(listener);
+
+    store.recordIpCheck({ trigger: 'startup', ip: '1.1.1.1' });
+    expect(listener).toHaveBeenLastCalledWith(undefined);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    recordResult(store, {
+      targetIp: '1.1.1.1',
+      previousTarget: '0.0.0.1',
+      status: 'updated',
+    });
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        id: 1,
+        action: 'updated',
+        fqdn: 'example.com',
+      }),
+    );
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().currentIp).toBe('1.1.1.1');
+
+    unsubscribe();
+    store.recordSyncOutcome({ status: 'ok' });
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

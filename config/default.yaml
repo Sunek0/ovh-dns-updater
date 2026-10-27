@@ -22,7 +22,7 @@ ui:
   enabled: true
   # Maximum number of events kept in memory (circular buffer).
   historySize: 500
-  # Polling interval used by the web UI, in seconds.
+  # Fallback polling interval used when SSE is unavailable.
   refreshSeconds: 10
 
 ipProviders:
