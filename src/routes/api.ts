@@ -1,9 +1,20 @@
+import rateLimit from '@fastify/rate-limit';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { extractBearerToken, safeEqual } from '../utils/auth.js';
 import { isValidIPv4 } from '../utils/ip.js';
 import { summarizeAccountResult } from '../utils/results.js';
 
+export const RATE_LIMITS = {
+  publicIp: { max: 30, timeWindow: '1 minute' },
+  sync: { max: 10, timeWindow: '1 minute' },
+  accountSync: { max: 10, timeWindow: '1 minute' },
+  checkip: { max: 30, timeWindow: '1 minute' },
+  setip: { max: 10, timeWindow: '1 minute' },
+} as const;
+
 const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
+  await fastify.register(rateLimit, { global: false });
+
   // Auth hook
   fastify.addHook('onRequest', async (request, reply) => {
     // Endpoints requiring authentication
@@ -76,13 +87,17 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     }
   };
 
-  fastify.get('/public-ip', async (req, _res) => {
+  fastify.get('/public-ip', {
+    config: { rateLimit: RATE_LIMITS.publicIp },
+  }, async (req, _res) => {
     req.log.info('Received public-ip request');
     const ip = await fastify.updaterService.getPublicIp();
     return { ip };
   });
 
-  fastify.post('/sync', async (req, reply) => {
+  fastify.post('/sync', {
+    config: { rateLimit: RATE_LIMITS.sync },
+  }, async (req, reply) => {
     if (req.auth?.kind === 'account') {
       return reply.code(403).send({ error: 'Forbidden' });
     }
@@ -92,7 +107,9 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     return result;
   });
 
-  fastify.post<{ Params: { id: string } }>('/accounts/:id/sync', async (req, reply) => {
+  fastify.post<{ Params: { id: string } }>('/accounts/:id/sync', {
+    config: { rateLimit: RATE_LIMITS.accountSync },
+  }, async (req, reply) => {
     if (req.auth?.kind === 'account') {
       return reply.code(403).send({ error: 'Forbidden' });
     }
@@ -111,7 +128,9 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     };
   });
 
-  fastify.get<{ Params: { token: string } }>('/:token/checkip', async (req, reply) => {
+  fastify.get<{ Params: { token: string } }>('/:token/checkip', {
+    config: { rateLimit: RATE_LIMITS.checkip },
+  }, async (req, reply) => {
     if (req.auth?.kind === 'account') {
       return handleAccountSync(req, reply, req.auth.accountId);
     }
@@ -121,7 +140,9 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     return result;
   });
 
-  fastify.get<{ Params: { token: string; ip: string } }>('/:token/setip/:ip', async (req, reply) => {
+  fastify.get<{ Params: { token: string; ip: string } }>('/:token/setip/:ip', {
+    config: { rateLimit: RATE_LIMITS.setip },
+  }, async (req, reply) => {
     if (!isValidIPv4(req.params.ip)) {
       return reply.code(400).send({ error: 'Invalid IPv4 address' });
     }

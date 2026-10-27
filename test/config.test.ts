@@ -58,7 +58,12 @@ describe('configuration validation', () => {
       ipProviders: ['http://ip.local'],
     });
 
-    expect(config.server).toEqual({ port: 3000, host: '0.0.0.0', logLevel: 'info' });
+    expect(config.server).toEqual({
+      port: 3000,
+      host: '0.0.0.0',
+      logLevel: 'info',
+      trustProxy: false,
+    });
     expect(config.ondemand.enabled).toBe(true);
     expect(config.scheduler.enabled).toBe(true);
     expect(config.accounts).toEqual([]);

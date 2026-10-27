@@ -66,6 +66,7 @@ export interface AppConfig {
     port: number;
     host: string;
     logLevel: string;
+    trustProxy?: boolean;
   };
   security: {
     apiKey: string;

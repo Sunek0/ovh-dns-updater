@@ -4,13 +4,40 @@ import { isValidIPv4 } from '../utils/ip.js';
 export class IpService {
   private providers: string[];
   private logger: FastifyBaseLogger;
+  private cacheTtlMs: number;
+  private cached?: { ip: string; expiresAt: number };
+  private inFlight?: Promise<string>;
 
-  constructor(providers: string[], logger: FastifyBaseLogger) {
+  constructor(providers: string[], logger: FastifyBaseLogger, cacheTtlMs = 30000) {
     this.providers = providers;
     this.logger = logger;
+    this.cacheTtlMs = cacheTtlMs;
   }
 
-  async getPublicIp(): Promise<string> {
+  async getPublicIp(force = false): Promise<string> {
+    if (!force && this.cached && this.cached.expiresAt > Date.now()) {
+      this.logger.debug({ ip: this.cached.ip }, 'Using cached public IP');
+      return this.cached.ip;
+    }
+
+    if (this.inFlight) {
+      return this.inFlight;
+    }
+
+    const request = this.fetchPublicIp()
+      .then(ip => {
+        this.cached = { ip, expiresAt: Date.now() + this.cacheTtlMs };
+        return ip;
+      })
+      .finally(() => {
+        this.inFlight = undefined;
+      });
+
+    this.inFlight = request;
+    return request;
+  }
+
+  private async fetchPublicIp(): Promise<string> {
     // Shuffle providers to load balance / randomize
     const shuffled = [...this.providers].sort(() => 0.5 - Math.random());
 

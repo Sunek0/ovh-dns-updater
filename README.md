@@ -54,6 +54,7 @@ does not include secret values.
 | :--- | :--- | :--- |
 | `server.port` | HTTP Port | `3000` |
 | `server.logLevel` | Logging level (pino) | `info` |
+| `server.trustProxy` | Trust `X-Forwarded-*` headers (only behind a trusted proxy) | `false` |
 | `security.apiKey` | Master token for API access | `change-me` |
 | `security.allowLegacyGlobalAccountTokens` | Allow account tokens to trigger global syncs (legacy) | `false` |
 | `scheduler.enabled` | Enable background checks | `true` |
@@ -100,6 +101,18 @@ All on-demand routes are prefixed with `/api`.
 
 Sync responses include `results` with a per-account summary (`Success`, `Partial`,
 `Failed`) and `details` with the per-domain/per-subdomain outcome.
+
+### Rate limiting and caching
+- `GET /api/public-ip`: 30 requests/minute per client IP.
+- `POST /api/sync` and `POST /api/accounts/:id/sync`: 10 requests/minute.
+- `GET /api/:token/checkip`: 30 requests/minute.
+- `GET /api/:token/setip/:ip`: 10 requests/minute.
+
+Exceeding a limit returns `429 Too Many Requests`. The detected public IP is cached
+for 30 seconds, and concurrent detections share a single upstream request.
+
+If the service runs behind a reverse proxy, enable `server.trustProxy` so rate limits
+use the real client IP. Do not enable it when the service is directly exposed.
 
 ### Legacy / Mikrotik (Requires valid `:token` in path)
 Compatible with devices that can only perform GET requests. The `:token` can be either the `apiKey` or a specific account `token`.

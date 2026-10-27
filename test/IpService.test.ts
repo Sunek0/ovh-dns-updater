@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { IpService } from '../src/services/IpService.js';
 import { FastifyBaseLogger } from 'fastify';
 
@@ -18,6 +18,11 @@ describe('IpService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     global.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it('should return IP from first working provider', async () => {
@@ -86,5 +91,69 @@ describe('IpService', () => {
     const service = new IpService(providers, mockLogger);
 
     await expect(service.getPublicIp()).rejects.toThrow('Could not determine public IP');
+  });
+
+  it('should cache the detected IP', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: async () => '1.2.3.4',
+    });
+
+    const service = new IpService(providers, mockLogger);
+
+    await expect(service.getPublicIp()).resolves.toBe('1.2.3.4');
+    await expect(service.getPublicIp()).resolves.toBe('1.2.3.4');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('should bypass the cache when forced', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: async () => '1.2.3.4',
+    });
+
+    const service = new IpService(providers, mockLogger);
+
+    await service.getPublicIp();
+    await service.getPublicIp(true);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('should deduplicate concurrent IP detections', async () => {
+    let resolveText!: (value: string) => void;
+    const text = new Promise<string>(resolve => {
+      resolveText = resolve;
+    });
+
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: () => text,
+    });
+
+    const service = new IpService(providers, mockLogger);
+    const first = service.getPublicIp();
+    const second = service.getPublicIp();
+
+    resolveText('1.2.3.4');
+
+    await expect(Promise.all([first, second])).resolves.toEqual(['1.2.3.4', '1.2.3.4']);
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('should refresh the IP after the cache expires', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: async () => '1.2.3.4',
+    });
+
+    const service = new IpService(providers, mockLogger, 1000);
+
+    await service.getPublicIp();
+    vi.setSystemTime(new Date(1001));
+    await service.getPublicIp();
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 });

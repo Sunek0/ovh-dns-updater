@@ -45,6 +45,7 @@ const appConfigSchema = z.object({
     port: z.coerce.number().int().min(1).max(65535).default(3000),
     host: nonEmptyString.default('0.0.0.0'),
     logLevel: nonEmptyString.default('info'),
+    trustProxy: z.boolean().default(false),
   }),
   security: z.object({
     apiKey: nonEmptyString,

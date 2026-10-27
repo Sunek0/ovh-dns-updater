@@ -28,6 +28,7 @@ const start = async () => {
       level: loggerLevel,
     },
     logController: new LogController({ disableRequestLogging: true }),
+    trustProxy: appConfig.server.trustProxy,
   });
 
   if (appConfig.security.allowLegacyGlobalAccountTokens) {
