@@ -38,6 +38,7 @@ describe('OvhAccount', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRequest.mockReset();
   });
 
   it('should update records only if IP changed in OVH', async () => {
@@ -54,34 +55,68 @@ describe('OvhAccount', () => {
       .mockImplementationOnce((m, p, pa, cb) => cb(null, {}));     // POST refresh
 
     const account = new OvhAccount(config, mockLogger);
-    await account.updateAccount('1.1.1.1');
+    const result = await account.updateAccount('1.1.1.1');
 
     // Verify PUT was called for @ but not for www
     const putCalls = mockRequest.mock.calls.filter(c => c[0] === 'PUT');
     expect(putCalls.length).toBe(1);
     expect(putCalls[0][1]).toContain('/123');
-    
+
     // Verify refresh was called because @ changed
     expect(mockRequest).toHaveBeenCalledWith('POST', '/domain/zone/example.com/refresh', undefined, expect.any(Function));
+    expect(result.status).toBe('success');
+    expect(result.domains[0].refresh).toBe('ok');
+    expect(result.domains[0].subdomains).toEqual([
+      { domain: 'example.com', subdomain: '', status: 'updated' },
+      { domain: 'example.com', subdomain: 'www', status: 'unchanged' }
+    ]);
+  });
+
+  it('should report partial results when one subdomain fails', async () => {
+    mockRequest
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123]))   // @ get ID
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.2.3.4' })) // @ details
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {}))      // @ PUT
+      .mockImplementationOnce((m, p, pa, cb) => cb(new Error('Subdomain failure'))) // www get ID fails
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {}));     // refresh
+
+    const account = new OvhAccount(config, mockLogger);
+    const result = await account.updateAccount('1.1.1.1');
+
+    expect(result.status).toBe('partial');
+    expect(result.domains[0].refresh).toBe('ok');
+    expect(result.domains[0].subdomains).toEqual([
+      { domain: 'example.com', subdomain: '', status: 'updated' },
+      {
+        domain: 'example.com',
+        subdomain: 'www',
+        status: 'failed',
+        error: expect.stringContaining('Subdomain failure')
+      }
+    ]);
   });
 
   it('should handle OVH API errors globally', async () => {
     mockRequest.mockImplementation((m, p, pa, cb) => cb(new Error('Network Error')));
 
     const account = new OvhAccount(config, mockLogger);
-    await account.updateAccount('1.1.1.1');
+    const result = await account.updateAccount('1.1.1.1');
 
     expect(mockLogger.error).toHaveBeenCalled();
+    expect(result.status).toBe('failed');
+    expect(result.domains[0].subdomains).toHaveLength(2);
+    expect(result.domains[0].subdomains.every(subdomain => subdomain.status === 'failed')).toBe(true);
   });
 
   it('should handle record not found', async () => {
-    mockRequest
-      .mockImplementationOnce((m, p, pa, cb) => cb(null, [])); // get ID -> no
+    mockRequest.mockImplementation((m, p, pa, cb) => cb(null, []));
 
     const account = new OvhAccount(config, mockLogger);
-    await account.updateAccount('1.1.1.1');
+    const result = await account.updateAccount('1.1.1.1');
 
     expect(mockLogger.warn).toHaveBeenCalledWith(expect.objectContaining({ sub: '' }), expect.stringContaining('Record not found'));
+    expect(result.status).toBe('failed');
+    expect(result.domains[0].subdomains.every(subdomain => subdomain.status === 'not-found')).toBe(true);
   });
 
   it('should handle refresh failure without stopping', async () => {
@@ -95,8 +130,10 @@ describe('OvhAccount', () => {
       .mockImplementationOnce((m, p, pa, cb) => cb(new Error('Refresh Failed'))); // Refresh fails
 
     const account = new OvhAccount(config, mockLogger);
-    await account.updateAccount('1.1.1.1');
+    const result = await account.updateAccount('1.1.1.1');
     expect(mockLogger.error).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), 'Failed to refresh zone');
+    expect(result.status).toBe('partial');
+    expect(result.domains[0].refresh).toBe('failed');
   });
 
   it('should handle complex subdomain configs', async () => {
@@ -110,10 +147,11 @@ describe('OvhAccount', () => {
       mockRequest.mockImplementation((m, p, pa, cb) => cb(null, []));
       
       const account = new OvhAccount(complexConfig, mockLogger);
-      await account.updateAccount('1.1.1.1');
+      const result = await account.updateAccount('1.1.1.1');
       // Verify it tried to fetch 'api' and 'blog'
       const getCalls = mockRequest.mock.calls.filter(c => c[0] === 'GET' && c[1].includes('/record'));
       expect(getCalls[0][2].subDomain).toBe('api');
       expect(getCalls[1][2].subDomain).toBe('blog');
+      expect(result.domains[0].subdomains.map(subdomain => subdomain.subdomain)).toEqual(['api', 'blog']);
   });
 });

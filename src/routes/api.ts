@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { extractBearerToken, safeEqual } from '../utils/auth.js';
 import { isValidIPv4 } from '../utils/ip.js';
+import { summarizeAccountResult } from '../utils/results.js';
 
 const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
   // Auth hook
@@ -63,8 +64,12 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     providedIp?: string,
   ) => {
     try {
-      const ip = await fastify.updaterService.syncAccount(accountId, providedIp);
-      return { ip, results: { [accountId]: 'Success' } };
+      const { ip, result } = await fastify.updaterService.syncAccount(accountId, providedIp);
+      return {
+        ip,
+        results: { [accountId]: summarizeAccountResult(result) },
+        details: { [accountId]: result },
+      };
     } catch (err) {
       request.log.error({ err, accountId }, 'Account sync failed');
       return reply.code(502).send({ error: 'Account sync failed' });
@@ -97,8 +102,13 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     }
 
     req.log.info(`Received sync request for account: ${req.params.id}`);
-    const ip = await fastify.updaterService.syncAccount(req.params.id);
-    return { message: 'Synced', ip };
+    const { ip, result } = await fastify.updaterService.syncAccount(req.params.id);
+    return {
+      message: 'Synced',
+      ip,
+      results: { [req.params.id]: summarizeAccountResult(result) },
+      details: { [req.params.id]: result },
+    };
   });
 
   fastify.get<{ Params: { token: string } }>('/:token/checkip', async (req, reply) => {

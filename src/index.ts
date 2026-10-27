@@ -1,13 +1,19 @@
 import Fastify, { LogController } from 'fastify';
-import config from 'config';
-import { AppConfig } from './types.js';
+import { loadConfig } from './config.js';
 import servicesPlugin from './plugins/services.js';
 import schedulerPlugin from './plugins/scheduler.js';
 import apiRoutes from './routes/api.js';
 
 const start = async () => {
-  const appConfig = config.util.toObject() as AppConfig;
-  const loggerLevel = appConfig.server?.logLevel || 'info';
+  let appConfig;
+  try {
+    appConfig = loadConfig();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+
+  const loggerLevel = appConfig.server.logLevel;
 
   const fastify = Fastify({
     logger: {
@@ -32,22 +38,22 @@ const start = async () => {
 
   try {
     // Custom Plugins
-    await fastify.register(servicesPlugin);
-    
-    if (appConfig.scheduler?.enabled !== false) {
+    await fastify.register(servicesPlugin, { appConfig });
+
+    if (appConfig.scheduler.enabled) {
       await fastify.register(schedulerPlugin);
     }
 
     // Routes
-    if (appConfig.ondemand?.enabled !== false) {
+    if (appConfig.ondemand.enabled) {
       await fastify.register(apiRoutes, { prefix: '/api' });
     }
     
     fastify.get('/health', async () => ({ status: 'ok' }));
 
     // Start
-    const port = Number(appConfig.server.port) || 3000;
-    const host = appConfig.server.host || '0.0.0.0';
+    const port = appConfig.server.port;
+    const host = appConfig.server.host;
     
     fastify.log.debug({ port, host }, 'Attempting to start server');
     const address = await fastify.listen({ port, host });

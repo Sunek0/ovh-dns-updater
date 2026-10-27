@@ -5,6 +5,8 @@ import { OvhAccount } from '../src/services/OvhAccount.js';
 // Global mocks for OvhAccount methods
 const mockUpdateAccount = vi.fn();
 
+const successResult = { status: 'success' as const, domains: [] };
+
 vi.mock('../src/services/OvhAccount.js', () => {
     return {
         OvhAccount: class {
@@ -36,14 +38,14 @@ describe('UpdaterService', () => {
       getPublicIp: vi.fn().mockResolvedValue('1.1.1.1')
     };
     mockUpdateAccount.mockReset();
-    mockUpdateAccount.mockResolvedValue(undefined);
+    mockUpdateAccount.mockResolvedValue(successResult);
   });
 
   it('should initialize only enabled accounts', () => {
-    new UpdaterService(config, mockIpService, mockLogger);
-    // Since we replaced OvhAccount with a class, we can check its behavior indirectly or check if it was instantiated.
-    // In this mock setup, we can't easily check calledTimes on the class itself if it's a real class,
-    // but we can check if updateAccount is eventually called.
+    const service = new UpdaterService(config, mockIpService, mockLogger);
+    expect(service.hasAccount('acc1')).toBe(true);
+    expect(service.hasAccount('acc2')).toBe(false);
+    expect(service.hasAccount('acc3')).toBe(true);
   });
 
   it('should sync all accounts with detected IP', async () => {
@@ -67,12 +69,37 @@ describe('UpdaterService', () => {
   it('should handle account sync failure', async () => {
     mockUpdateAccount
         .mockRejectedValueOnce(new Error('API Down'))
-        .mockResolvedValueOnce(undefined);
+        .mockResolvedValueOnce(successResult);
 
     const service = new UpdaterService(config, mockIpService, mockLogger);
     const result = await service.syncAll();
 
     expect(result.results['acc1']).toContain('Failed: API Down');
+    expect(result.results['acc3']).toBe('Success');
+    expect(result.details['acc1'].status).toBe('failed');
+    expect(result.details['acc1'].error).toContain('API Down');
+  });
+
+  it('should surface partial account results', async () => {
+    mockUpdateAccount
+        .mockResolvedValueOnce({
+          status: 'partial',
+          domains: [{
+            domain: 'example.com',
+            refresh: 'ok',
+            subdomains: [
+              { domain: 'example.com', subdomain: '', status: 'updated' },
+              { domain: 'example.com', subdomain: 'www', status: 'failed', error: 'nope' }
+            ]
+          }]
+        })
+        .mockResolvedValueOnce(successResult);
+
+    const service = new UpdaterService(config, mockIpService, mockLogger);
+    const result = await service.syncAll();
+
+    expect(result.results['acc1']).toBe('Partial');
+    expect(result.details['acc1'].status).toBe('partial');
     expect(result.results['acc3']).toBe('Success');
   });
 
@@ -90,16 +117,18 @@ describe('UpdaterService', () => {
 
   it('should sync specific account', async () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
-    const ip = await service.syncAccount('acc1');
+    const { ip, result } = await service.syncAccount('acc1');
     expect(ip).toBe('1.1.1.1');
+    expect(result.status).toBe('success');
     expect(mockUpdateAccount).toHaveBeenCalled();
   });
 
   it('should sync a specific account with a provided IP', async () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
-    const ip = await service.syncAccount('acc1', '9.9.9.9');
+    const { ip, result } = await service.syncAccount('acc1', '9.9.9.9');
 
     expect(ip).toBe('9.9.9.9');
+    expect(result.status).toBe('success');
     expect(mockIpService.getPublicIp).not.toHaveBeenCalled();
     expect(mockUpdateAccount).toHaveBeenCalledWith('9.9.9.9');
   });

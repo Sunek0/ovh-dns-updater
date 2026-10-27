@@ -7,6 +7,11 @@ const mockSyncAll = vi.fn();
 const mockSyncAccount = vi.fn();
 const mockHasAccount = vi.fn();
 
+const successAccountResult = (ip: string) => ({
+    ip,
+    result: { status: 'success' as const, domains: [] }
+});
+
 describe('API Routes', () => {
     let app: any;
 
@@ -89,14 +94,18 @@ describe('API Routes', () => {
     });
 
     it('GET /api/:token/checkip should scope an account token to its account', async () => {
-        mockSyncAccount.mockResolvedValue('1.1.1.1');
+        mockSyncAccount.mockResolvedValue(successAccountResult('1.1.1.1'));
 
         const res = await request(app.server).get('/api/legacy-token/checkip');
 
         expect(res.status).toBe(200);
         expect(mockSyncAccount).toHaveBeenCalledWith('acc1', undefined);
         expect(mockSyncAll).not.toHaveBeenCalled();
-        expect(res.body).toEqual({ ip: '1.1.1.1', results: { acc1: 'Success' } });
+        expect(res.body).toEqual({
+            ip: '1.1.1.1',
+            results: { acc1: 'Success' },
+            details: { acc1: { status: 'success', domains: [] } }
+        });
     });
 
     it('GET /api/:token/checkip should run a global sync with the master path token', async () => {
@@ -157,13 +166,15 @@ describe('API Routes', () => {
     });
 
     it('POST /api/accounts/:id/sync should sync specific account', async () => {
-        mockSyncAccount.mockResolvedValue('1.1.1.1');
+        mockSyncAccount.mockResolvedValue(successAccountResult('1.1.1.1'));
         const res = await request(app.server)
             .post('/api/accounts/acc1/sync')
             .set('Authorization', 'Bearer master-token');
 
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('1.1.1.1');
+        expect(res.body.results.acc1).toBe('Success');
+        expect(res.body.details.acc1.status).toBe('success');
         expect(mockSyncAccount).toHaveBeenCalledWith('acc1');
     });
 
@@ -180,12 +191,16 @@ describe('API Routes', () => {
     });
 
     it('GET /api/:token/setip/:ip should scope an account token to its account', async () => {
-        mockSyncAccount.mockResolvedValue('9.9.9.9');
+        mockSyncAccount.mockResolvedValue(successAccountResult('9.9.9.9'));
 
         const res = await request(app.server).get('/api/legacy-token/setip/9.9.9.9');
 
         expect(res.status).toBe(200);
-        expect(res.body).toEqual({ ip: '9.9.9.9', results: { acc1: 'Success' } });
+        expect(res.body).toEqual({
+            ip: '9.9.9.9',
+            results: { acc1: 'Success' },
+            details: { acc1: { status: 'success', domains: [] } }
+        });
         expect(mockSyncAccount).toHaveBeenCalledWith('acc1', '9.9.9.9');
         expect(mockSyncAll).not.toHaveBeenCalled();
     });

@@ -44,6 +44,10 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 
 The project uses `node-config`. Configuration is merged from `config/default.yaml`, environment variables, and optionally `config/local.yaml`.
 
+The merged configuration is validated at startup. Invalid values, duplicate account IDs,
+duplicate tokens or malformed provider URLs abort the process with a clear error that
+does not include secret values.
+
 ### Settings Overview
 
 | Path | Description | Default |
@@ -64,7 +68,7 @@ The project uses `node-config`. Configuration is merged from `config/default.yam
 Each account in the `accounts` array can have:
 - `id`: Unique identifier for logging/API.
 - `token`: (Optional) A dedicated token for legacy GET access. It is scoped to this account.
-- `credentials`: OVH endpoint and keys.
+- `credentials`: OVH endpoint and keys. `timeout` is optional and defaults to 30 seconds.
 - `domains`: List of domains and subdomains (use `@` for root).
 
 ```yaml
@@ -93,6 +97,9 @@ All on-demand routes are prefixed with `/api`.
 ### Management (Requires `Authorization: Bearer <apiKey>`)
 - `POST /api/sync`: Force a check and update for all enabled accounts.
 - `POST /api/accounts/:id/sync`: Sync only a specific account.
+
+Sync responses include `results` with a per-account summary (`Success`, `Partial`,
+`Failed`) and `details` with the per-domain/per-subdomain outcome.
 
 ### Legacy / Mikrotik (Requires valid `:token` in path)
 Compatible with devices that can only perform GET requests. The `:token` can be either the `apiKey` or a specific account `token`.

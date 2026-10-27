@@ -1,6 +1,12 @@
 import ovh, { OvhClient } from 'ovh';
 import { FastifyBaseLogger } from 'fastify';
-import { AccountConfig, SubdomainConfig } from '../types.js';
+import {
+  AccountConfig,
+  AccountSyncResult,
+  AccountSyncStatus,
+  DomainSyncResult,
+  SubdomainSyncResult,
+} from '../types.js';
 
 export class OvhAccount {
   private client: OvhClient;
@@ -32,52 +38,72 @@ export class OvhAccount {
     });
   }
 
-  async updateAccount(publicIp: string): Promise<void> {
+  async updateAccount(publicIp: string): Promise<AccountSyncResult> {
     this.logger.info({ publicIp }, 'Starting account update');
+
+    const domains: DomainSyncResult[] = [];
 
     for (const domainCfg of this.config.domains) {
       const { name: domainName, subdomains } = domainCfg;
+      const domainResult: DomainSyncResult = {
+        domain: domainName,
+        refresh: 'not-needed',
+        subdomains: [],
+      };
       let domainUpdated = false;
 
       this.logger.debug({ domain: domainName }, 'Processing domain');
 
-      // Expand subdomains logic (support string or object {name: 'custom-sub'} if needed in future, current schema is string | SubdomainConfig)
-      // Wait, schema in types.ts: subdomains: (string | SubdomainConfig)[];
-      // But SubdomainConfig is {[domain: string]: string}.
-      // The "NextGen" requirement was "puedan usarse varios app keys...". I should keep it simple.
-      // I'll assume simple strings for now based on typical usage, but handle the object case if it maps sub -> something.
-      // Actually, looking at old code: `subdomainsToUpdate` could be string or object.
-      // Let's simplify and assume the configuration will be normalized to strings or I map it here.
-      
-      const normalizedSubdomains = subdomains.map(s => {
-        let name = typeof s === 'string' ? s : Object.keys(s)[0];
-        // Normalize '@' to empty string for OVH root domain
-        return name === '@' ? '' : name;
-      });
+      // Accept both plain subdomain strings and single-key objects (legacy shape).
+      const normalizedSubdomains = subdomains
+        .map(subdomain => typeof subdomain === 'string'
+          ? subdomain
+          : Object.keys(subdomain)[0])
+        .filter((name): name is string => typeof name === 'string')
+        .map(name => name === '@' ? '' : name);
 
       for (const sub of normalizedSubdomains) {
-        if (typeof sub !== 'string') continue;
-
         try {
-          const changed = await this.updateRecord(domainName, sub, publicIp);
-          if (changed) domainUpdated = true;
+          const result = await this.updateRecord(domainName, sub, publicIp);
+          domainResult.subdomains.push(result);
+          if (result.status === 'updated') domainUpdated = true;
         } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
           this.logger.error({ domain: domainName, sub, err }, 'Failed to update subdomain');
+          domainResult.subdomains.push({
+            domain: domainName,
+            subdomain: sub,
+            status: 'failed',
+            error: message,
+          });
         }
       }
 
       if (domainUpdated) {
         try {
           await this.request('POST', `/domain/zone/${domainName}/refresh`);
+          domainResult.refresh = 'ok';
           this.logger.info({ domain: domainName }, 'Domain zone refreshed');
         } catch (err) {
+          domainResult.refresh = 'failed';
           this.logger.error({ domain: domainName, err }, 'Failed to refresh zone');
         }
       }
+
+      domains.push(domainResult);
     }
+
+    return {
+      status: summarizeAccountStatus(domains),
+      domains,
+    };
   }
 
-  private async updateRecord(domain: string, sub: string, targetIp: string): Promise<boolean> {
+  private async updateRecord(
+    domain: string,
+    sub: string,
+    targetIp: string,
+  ): Promise<SubdomainSyncResult> {
     // 1. Find the record ID
     const records = await this.request<number[]>('GET', `/domain/zone/${domain}/record`, {
       fieldType: 'A',
@@ -86,7 +112,7 @@ export class OvhAccount {
 
     if (!records || records.length === 0) {
       this.logger.warn({ domain, sub }, 'Record not found in OVH, skipping (creation not supported yet)');
-      return false;
+      return { domain, subdomain: sub, status: 'not-found' };
     }
 
     // usually one record per type/subdomain
@@ -97,7 +123,7 @@ export class OvhAccount {
 
     if (recordData.target === targetIp) {
       this.logger.debug({ domain, sub, ip: targetIp }, 'IP already matches in OVH, skipping update');
-      return false;
+      return { domain, subdomain: sub, status: 'unchanged' };
     }
 
     // 3. Perform the update since it's different
@@ -107,6 +133,29 @@ export class OvhAccount {
       subDomain: sub || undefined,
     });
 
-    return true;
+    return { domain, subdomain: sub, status: 'updated' };
   }
+}
+
+export function summarizeAccountStatus(domains: DomainSyncResult[]): AccountSyncStatus {
+  const subdomains = domains.flatMap(domain => domain.subdomains);
+  const problematic = subdomains.filter(
+    subdomain => subdomain.status === 'failed' || subdomain.status === 'not-found',
+  ).length;
+  const successful = subdomains.length - problematic;
+
+  let status: AccountSyncStatus;
+  if (problematic === 0) {
+    status = 'success';
+  } else if (successful === 0) {
+    status = 'failed';
+  } else {
+    status = 'partial';
+  }
+
+  if (status === 'success' && domains.some(domain => domain.refresh === 'failed')) {
+    status = 'partial';
+  }
+
+  return status;
 }

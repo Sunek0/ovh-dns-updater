@@ -1,5 +1,6 @@
 import { FastifyBaseLogger } from 'fastify';
-import { AppConfig, AccountConfig } from '../types.js';
+import { AccountConfig, AccountSyncResult, AppConfig } from '../types.js';
+import { summarizeAccountResult } from '../utils/results.js';
 import { IpService } from './IpService.js';
 import { OvhAccount } from './OvhAccount.js';
 
@@ -30,7 +31,11 @@ export class UpdaterService {
     }
   }
 
-  async syncAll(force = false, providedIp?: string): Promise<{ ip: string; results: Record<string, string> }> {
+  async syncAll(force = false, providedIp?: string): Promise<{
+    ip: string;
+    results: Record<string, string>;
+    details: Record<string, AccountSyncResult>;
+  }> {
     this.logger.info({ force, providedIp }, 'Starting global sync');
     
     // 1. Get IP (use provided or detect)
@@ -47,36 +52,43 @@ export class UpdaterService {
 
     this.lastIp = currentIp;
     const results: Record<string, string> = {};
+    const details: Record<string, AccountSyncResult> = {};
 
     // 3. Update all accounts in parallel
-    // Each OvhAccount.updateAccount will verify if the IP is actually different in OVH before writing
+    // Each OvhAccount.updateAccount verifies whether the IP actually differs in OVH before writing.
     const promises = Array.from(this.accounts.entries()).map(async ([id, account]) => {
       try {
-        await account.updateAccount(currentIp);
-        results[id] = 'Success';
+        const result = await account.updateAccount(currentIp);
+        details[id] = result;
+        results[id] = summarizeAccountResult(result);
       } catch (err: any) {
+        const message = err instanceof Error ? err.message : String(err);
         this.logger.error({ accountId: id, err }, 'Account update failed');
-        results[id] = `Failed: ${err.message}`;
+        details[id] = { status: 'failed', domains: [], error: message };
+        results[id] = `Failed: ${message}`;
       }
     });
 
     await Promise.all(promises);
-    return { ip: currentIp, results };
+    return { ip: currentIp, results, details };
   }
 
   hasAccount(accountId: string): boolean {
     return this.accounts.has(accountId);
   }
 
-  async syncAccount(accountId: string, providedIp?: string): Promise<string> {
+  async syncAccount(accountId: string, providedIp?: string): Promise<{
+    ip: string;
+    result: AccountSyncResult;
+  }> {
     const account = this.accounts.get(accountId);
     if (!account) {
       throw new Error(`Account ${accountId} not found`);
     }
 
     const currentIp = providedIp ?? await this.ipService.getPublicIp();
-    await account.updateAccount(currentIp);
-    return currentIp;
+    const result = await account.updateAccount(currentIp);
+    return { ip: currentIp, result };
   }
   
   getPublicIp() {

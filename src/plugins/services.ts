@@ -1,10 +1,13 @@
 // Plugin to register services
 import fp from 'fastify-plugin';
 import { FastifyPluginAsync } from 'fastify';
-import config from 'config';
 import { AppConfig } from '../types.js';
 import { IpService } from '../services/IpService.js';
 import { UpdaterService } from '../services/UpdaterService.js';
+
+interface ServicesPluginOptions {
+  appConfig: AppConfig;
+}
 
 // Declaration merging
 declare module 'fastify' {
@@ -14,8 +17,8 @@ declare module 'fastify' {
   }
 }
 
-const servicesPlugin: FastifyPluginAsync = async (fastify, _opts) => {
-  const appConfig = config.util.toObject() as AppConfig;
+const servicesPlugin: FastifyPluginAsync<ServicesPluginOptions> = async (fastify, opts) => {
+  const appConfig = opts.appConfig;
   fastify.decorate('config', appConfig);
 
   const ipService = new IpService(appConfig.ipProviders, fastify.log);

@@ -27,6 +27,31 @@ export interface OvhCredentials {
   timeout?: number; // milliseconds, defaults to 30000
 }
 
+export type SubdomainSyncStatus = 'updated' | 'unchanged' | 'not-found' | 'failed';
+
+export interface SubdomainSyncResult {
+  domain: string;
+  subdomain: string;
+  status: SubdomainSyncStatus;
+  error?: string;
+}
+
+export type RefreshStatus = 'ok' | 'failed' | 'not-needed';
+
+export interface DomainSyncResult {
+  domain: string;
+  refresh: RefreshStatus;
+  subdomains: SubdomainSyncResult[];
+}
+
+export type AccountSyncStatus = 'success' | 'partial' | 'failed';
+
+export interface AccountSyncResult {
+  status: AccountSyncStatus;
+  domains: DomainSyncResult[];
+  error?: string;
+}
+
 export interface AccountConfig {
   id: string;
   provider: 'ovh';
