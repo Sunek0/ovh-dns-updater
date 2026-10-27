@@ -302,6 +302,45 @@ JSON logs and exposes a `HEALTHCHECK` against `/health`. The static UI files in
 `config/local.yml`) are intentionally excluded from the build context and must
 be mounted at runtime.
 
+### GitHub mirror y GHCR
+
+GitHub se usa únicamente como espejo de `main` y de los tags de release; la rama
+`develop` permanece en GitLab. El workflow
+`.github/workflows/release-image.yml` construye y publica la imagen en GitHub
+Container Registry cuando se empuja un tag `vX.Y.Z`.
+
+```bash
+git push github main
+git push github --tags
+```
+
+- Ejecuta tests, typecheck, build y auditoría antes de publicar.
+- Publica imágenes multiarquitectura `linux/amd64` y `linux/arm64`.
+- Etiquetas generadas: `X.Y.Z`, `X.Y`, `latest` y `sha-<commit>`.
+- No requiere secretos adicionales: usa el `GITHUB_TOKEN` integrado.
+
+Para publicar una release existente que no tenga el workflow en su commit
+(por ejemplo `v1.0.0`), lleva el workflow a `main` y lanza manualmente
+**Actions → Publish release image → Run workflow** sobre `main`, indicando la
+versión (`1.0.0`).
+
+Las imágenes quedan en:
+
+```text
+ghcr.io/sunek0/ovh-dns-updater:latest
+ghcr.io/sunek0/ovh-dns-updater:1.0.0
+```
+
+Si el paquete está privado, hace falta autenticarse:
+
+```bash
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u <usuario> --password-stdin
+docker pull ghcr.io/sunek0/ovh-dns-updater:latest
+```
+
+Para que cualquiera pueda descargarla, cambia la visibilidad del paquete a
+pública en **Packages → ovh-dns-updater → Package settings**.
+
 ## Testing
 
 The project maintains high coverage (90%+) using Vitest.
