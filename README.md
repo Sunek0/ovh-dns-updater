@@ -42,7 +42,8 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 
 ## Configuration
 
-The project uses `node-config`. Configuration is merged from `config/default.yaml`, environment variables, and optionally `config/local.yaml`.
+The project uses `node-config`. Configuration is merged from `config/default.yaml`,
+environment variables, and the instance file `config/local.yml` (or `config/local.yaml`).
 
 The merged configuration is validated at startup. Invalid values, duplicate account IDs,
 duplicate tokens or malformed provider URLs abort the process with a clear error that
@@ -92,6 +93,82 @@ accounts:
         subdomains: ['@', 'vpn', 'cloud']
 ```
 
+### Configuración del servidor: `config/local.yml`
+
+En el servidor no se usa `config/production.yml`. Toda la configuración de la
+instancia debe ir en `config/local.yml`; `node-config` lo carga automáticamente
+y el fichero está excluido de Git y del contexto de Docker.
+
+Ejemplo completo para el servidor:
+
+```yaml
+# config/local.yml - no versionar
+server:
+  port: 3000
+  host: '0.0.0.0'
+  logLevel: 'info'
+  # Activar solo si hay un proxy inverso de confianza delante.
+  trustProxy: false
+
+security:
+  apiKey: 'CAMBIAR_POR_UNA_CLAVE_LARGA_Y_ALEATORIA'
+  allowLegacyGlobalAccountTokens: false
+
+ondemand:
+  enabled: true
+
+scheduler:
+  enabled: true
+  interval: 600
+
+ipProviders:
+  - https://api.ipify.org
+  - https://ifconfig.me/ip
+  - https://icanhazip.com
+
+accounts:
+  - id: 'personal-account'
+    provider: 'ovh'
+    enabled: true
+    recordStrategy: 'all'
+    credentials:
+      endpoint: 'ovh-eu'
+      appKey: '...'
+      appSecret: '...'
+      consumerKey: '...'
+      timeout: 30000
+    domains:
+      - name: 'example.com'
+        subdomains: ['@', '*']
+      - name: 'example.org'
+        subdomains: ['@', '*']
+
+  - id: 'second-account'
+    provider: 'ovh'
+    enabled: true
+    # recordStrategy omitted -> "all"
+    credentials:
+      endpoint: 'ovh-eu'
+      appKey: '...'
+      appSecret: '...'
+      consumerKey: '...'
+    domains:
+      - name: 'example.net'
+        subdomains: ['cajafuerte', 'identidad', 'wiki']
+```
+
+Notas:
+
+- `@` actualiza el registro raíz y `*` el comodín del dominio.
+- `recordStrategy` acepta `all` (por defecto), `single` o `fail`.
+- `security.apiKey` debe ser distinta de los tokens de cuenta.
+- Si el servicio está detrás de un proxy, activa `server.trustProxy: true`.
+- El fichero `config/local.yml` no se copia dentro de la imagen Docker; hay que
+  montarlo en runtime.
+- No se necesita `config/production.yml`. Si arrancas fuera de Docker con
+  `NODE_ENV=production`, añade `SUPPRESS_STRICTNESS_CHECK=true` para evitar el
+  aviso de node-config. La imagen Docker ya lo define.
+
 ## API Reference
 
 All on-demand routes are prefixed with `/api`.
@@ -136,21 +213,28 @@ Compatible with devices that can only perform GET requests. The `:token` can be 
 pnpm dev
 
 # Production (JSON logs)
-NODE_ENV=production pnpm start
+NODE_ENV=production SUPPRESS_STRICTNESS_CHECK=true pnpm start
 ```
 
 In production the logger emits JSON by default. Set `LOG_PRETTY=true` only if you
-explicitly want `pino-pretty` output.
+explicitly want `pino-pretty` output. The Docker image already sets
+`NODE_ENV=production` and `SUPPRESS_STRICTNESS_CHECK=true`.
 
 ### Docker
 ```bash
 docker build -t ovh-dns-updater-ng .
-docker run -p 3000:3000 -v ./config:/usr/src/app/config ovh-dns-updater-ng
+docker run -p 3000:3000 \
+  -v /etc/ovh-dns-updater/local.yml:/usr/src/app/config/local.yml:ro \
+  ovh-dns-updater-ng
 ```
+
+Monta el fichero `local.yml` en lugar del directorio completo para no ocultar el
+`config/default.yaml` incluido en la imagen. Si prefieres montar un directorio,
+asegúrate de que también contiene `default.yaml`.
 
 The runtime image uses Node 24.22.1, runs as the unprivileged `node` user, emits
 JSON logs and exposes a `HEALTHCHECK` against `/health`. Instance-specific settings
-(including `config/local.yaml`) are intentionally excluded from the build context
+(including `config/local.yml`) are intentionally excluded from the build context
 and must be mounted at runtime.
 
 ## Testing

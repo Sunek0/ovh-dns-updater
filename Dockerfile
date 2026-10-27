@@ -13,6 +13,9 @@ RUN pnpm prune --prod
 
 FROM base AS final
 ENV NODE_ENV=production
+# There is intentionally no config/production.yaml: instance settings live in
+# config/local.yml, mounted at runtime. Suppress node-config's strictness warning.
+ENV SUPPRESS_STRICTNESS_CHECK=true
 WORKDIR /usr/src/app
 COPY --from=build --chown=node:node /usr/src/app/dist ./dist
 COPY --from=build --chown=node:node /usr/src/app/node_modules ./node_modules
