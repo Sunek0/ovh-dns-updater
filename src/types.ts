@@ -77,6 +77,24 @@ export interface AccountConfig {
   domains: DomainConfig[];
 }
 
+export interface UiConfig {
+  enabled: boolean;
+  historySize: number;
+  refreshSeconds: number;
+}
+
+export interface ProviderFailure {
+  provider: string;
+  error: string;
+}
+
+export interface IpDetectionReport {
+  ip: string | null;
+  provider: string | null;
+  failures: ProviderFailure[];
+  detectedAt: Date;
+}
+
 export interface AppConfig {
   server: {
     port: number;
@@ -95,6 +113,7 @@ export interface AppConfig {
     enabled: boolean;
     interval: number;
   };
+  ui: UiConfig;
   ipProviders: string[];
   accounts: AccountConfig[];
 }

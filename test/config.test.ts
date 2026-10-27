@@ -66,7 +66,42 @@ describe('configuration validation', () => {
     });
     expect(config.ondemand.enabled).toBe(true);
     expect(config.scheduler.enabled).toBe(true);
+    expect(config.ui).toEqual({
+      enabled: true,
+      historySize: 500,
+      refreshSeconds: 10,
+    });
     expect(config.accounts).toEqual([]);
+  });
+
+  it('accepts a custom UI configuration', () => {
+    const raw = validConfig();
+    (raw as any).ui = {
+      enabled: false,
+      historySize: 25,
+      refreshSeconds: 5,
+    };
+
+    const config = validateConfig(raw);
+    expect(config.ui).toEqual({
+      enabled: false,
+      historySize: 25,
+      refreshSeconds: 5,
+    });
+  });
+
+  it('rejects an invalid UI history size', () => {
+    const raw = validConfig();
+    (raw as any).ui = { historySize: 0 };
+
+    expect(() => validateConfig(raw)).toThrow(/ui\.historySize/);
+  });
+
+  it('rejects an invalid UI refresh interval', () => {
+    const raw = validConfig();
+    (raw as any).ui = { refreshSeconds: 0 };
+
+    expect(() => validateConfig(raw)).toThrow(/ui\.refreshSeconds/);
   });
 
   it('rejects a missing API key', () => {

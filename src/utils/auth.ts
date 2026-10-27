@@ -26,3 +26,8 @@ export function safeEqual(left?: string, right?: string): boolean {
     timingSafeEqual(leftBuffer, rightBuffer)
   );
 }
+
+/** True when the request header carries the master API key as a Bearer token. */
+export function isMasterBearer(header: string | undefined, apiKey: string): boolean {
+  return safeEqual(extractBearerToken(header), apiKey);
+}

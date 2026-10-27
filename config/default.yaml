@@ -18,6 +18,13 @@ scheduler:
   enabled: true
   interval: 600
 
+ui:
+  enabled: true
+  # Maximum number of events kept in memory (circular buffer).
+  historySize: 500
+  # Polling interval used by the web UI, in seconds.
+  refreshSeconds: 10
+
 ipProviders:
   - https://api.ipify.org
   - https://ifconfig.me/ip

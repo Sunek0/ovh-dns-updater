@@ -8,6 +8,7 @@ import {
   RecordSyncResult,
   SubdomainSyncResult,
 } from '../types.js';
+import { normalizeSubdomain } from '../utils/subdomains.js';
 
 export class OvhAccount {
   private client: OvhClient;
@@ -57,11 +58,8 @@ export class OvhAccount {
 
       // Accept both plain subdomain strings and single-key objects (legacy shape).
       const normalizedSubdomains = subdomains
-        .map(subdomain => typeof subdomain === 'string'
-          ? subdomain
-          : Object.keys(subdomain)[0])
-        .filter((name): name is string => typeof name === 'string')
-        .map(name => name === '@' ? '' : name);
+        .map(normalizeSubdomain)
+        .filter((name): name is string => name !== undefined);
 
       for (const sub of normalizedSubdomains) {
         try {

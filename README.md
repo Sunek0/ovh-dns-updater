@@ -15,7 +15,8 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 - **Smart Sync**:
   - **Background Scheduler**: Periodically checks and updates records (default: every 10 mins).
   - **On-Demand API**: Trigger updates via REST API.
-- **Feature Toggles**: Enable/Disable the scheduler or the API independently via configuration.
+- **Web Status UI**: Optional, dependency-free interface with live in-memory status, per-record values, IP provider health and a filterable event timeline.
+- **Feature Toggles**: Enable/Disable the scheduler, the API or the web UI independently via configuration.
 - **Modern Stack**: Node.js 24+, Fastify 5, TypeScript, Pino logging, and Vitest.
 
 ## Installation
@@ -61,6 +62,9 @@ does not include secret values.
 | `scheduler.enabled` | Enable background checks | `true` |
 | `scheduler.interval` | Interval between checks (seconds) | `600` (10m) |
 | `ondemand.enabled` | Enable the REST API | `true` |
+| `ui.enabled` | Serve the web UI and its status API | `true` |
+| `ui.historySize` | Events kept in the in-memory circular buffer | `500` |
+| `ui.refreshSeconds` | Polling interval used by the web UI | `10` |
 
 > **Security:** change `security.apiKey` before exposing the service. The default
 > value is only a placeholder and must not be used in production.
@@ -121,6 +125,11 @@ scheduler:
   enabled: true
   interval: 600
 
+ui:
+  enabled: true
+  historySize: 500
+  refreshSeconds: 10
+
 ipProviders:
   - https://api.ipify.org
   - https://ifconfig.me/ip
@@ -169,17 +178,56 @@ Notas:
   `NODE_ENV=production`, añade `SUPPRESS_STRICTNESS_CHECK=true` para evitar el
   aviso de node-config. La imagen Docker ya lo define.
 
+## Interfaz web
+
+La UI está habilitada por defecto y se sirve desde el propio Fastify, sin
+dependencias nuevas ni CDNs externos. Funciona en una red local sin acceso a
+Internet y se adapta a móvil y a modo oscuro (`prefers-color-scheme`).
+
+- `GET /` sirve la interfaz estática. No requiere autenticación para cargar el
+  HTML, CSS y JS.
+- La UI pide la `security.apiKey`, la guarda solo en `sessionStorage` y la envía
+  como `Authorization: Bearer <apiKey>` en cada petición de datos.
+- Muestra la IP actual e inicial, última/próxima comprobación, uptime, estado
+  del scheduler y de on-demand, proveedor de IP, contadores, una tarjeta por
+  cuenta con sus registros y un timeline filtrable de eventos.
+- Si `ondemand.enabled` es `true`, aparece el botón **Comprobar ahora**, que usa
+  el endpoint existente `POST /api/sync`.
+- El polling se pausa cuando la pestaña no está visible y usa
+  `ui.refreshSeconds` (10 s por defecto).
+
+Todo el estado de la UI vive en memoria: no hay base de datos ni ficheros. Al
+reiniciar el proceso se pierde el historial y los valores iniciales se vuelven
+a leer desde OVH en la primera sincronización. El buffer de eventos conserva
+como máximo `ui.historySize` entradas.
+
+`ui.enabled: false` desactiva la interfaz y también `/api/status` y
+`/api/events`. El updater, el scheduler y la API on-demand siguen funcionando
+con normalidad. Los secretos de OVH (`appKey`, `appSecret`, `consumerKey`) y la
+`apiKey` nunca forman parte del snapshot ni del historial.
+
 ## API Reference
 
-All on-demand routes are prefixed with `/api`.
+On-demand routes are prefixed with `/api`. The UI status/events endpoints are
+also under `/api` and are served when `ui.enabled` is `true`, independently of
+whether on-demand updates are enabled.
 
 ### Public Endpoints
+- `GET /`: Static web UI (when `ui.enabled` is `true`).
 - `GET /health`: Liveness check.
 - `GET /api/public-ip`: Returns the currently detected public IP.
 
 ### Management (Requires `Authorization: Bearer <apiKey>`)
+- `GET /api/status`: Full in-memory snapshot (global state, accounts, records and counters).
+- `GET /api/events?limit=&account=&domain=&type=`: Event history. `type` accepts
+  `updated`, `unchanged`, `error` or `public_ip_changed`. Results are returned
+  newest first and `limit` defaults to 100.
 - `POST /api/sync`: Force a check and update for all enabled accounts.
 - `POST /api/accounts/:id/sync`: Sync only a specific account.
+
+`/api/*` responses include `Cache-Control: no-store` and
+`X-Content-Type-Options: nosniff`. The status snapshot never includes OVH
+credentials, account tokens or the master API key.
 
 Sync responses include `results` with a per-account summary (`Success`, `Partial`,
 `Failed`) and `details` with the per-domain/per-subdomain outcome.
@@ -233,9 +281,10 @@ Monta el fichero `local.yml` en lugar del directorio completo para no ocultar el
 asegúrate de que también contiene `default.yaml`.
 
 The runtime image uses Node 24.22.1, runs as the unprivileged `node` user, emits
-JSON logs and exposes a `HEALTHCHECK` against `/health`. Instance-specific settings
-(including `config/local.yml`) are intentionally excluded from the build context
-and must be mounted at runtime.
+JSON logs and exposes a `HEALTHCHECK` against `/health`. The static UI files in
+`public/` are copied into the image. Instance-specific settings (including
+`config/local.yml`) are intentionally excluded from the build context and must
+be mounted at runtime.
 
 ## Testing
 

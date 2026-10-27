@@ -18,7 +18,8 @@ vi.mock('../src/services/OvhAccount.js', () => {
 const mockLogger: any = {
   info: vi.fn(),
   error: vi.fn(),
-  debug: vi.fn()
+  debug: vi.fn(),
+  warn: vi.fn()
 };
 
 describe('UpdaterService', () => {
@@ -157,5 +158,152 @@ describe('UpdaterService', () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
     const ip = await service.getPublicIp();
     expect(ip).toBe('1.1.1.1');
+  });
+
+  it('should instrument scheduler triggers and per-subdomain results', async () => {
+    const stateStore = {
+      recordIpCheck: vi.fn(),
+      recordRecordResult: vi.fn(),
+      recordAccountError: vi.fn(),
+      recordSyncOutcome: vi.fn(),
+    };
+    mockUpdateAccount.mockResolvedValueOnce({
+      status: 'partial',
+      domains: [{
+        domain: 'example.com',
+        refresh: 'ok',
+        subdomains: [
+          {
+            domain: 'example.com',
+            subdomain: '',
+            status: 'updated',
+            records: [{ recordId: 1, previousTarget: '0.0.0.1', status: 'updated' }],
+          },
+          {
+            domain: 'example.com',
+            subdomain: 'www',
+            status: 'failed',
+            error: 'nope',
+          },
+        ],
+      }],
+    });
+
+    const service = new UpdaterService(config, mockIpService, mockLogger, stateStore as any);
+    const result = await service.syncAll(false, undefined, 'scheduler');
+
+    expect(result.details['acc1'].status).toBe('partial');
+    expect(stateStore.recordIpCheck).toHaveBeenCalledWith({
+      trigger: 'scheduler',
+      ip: '1.1.1.1',
+    });
+    expect(stateStore.recordRecordResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: 'scheduler',
+        accountId: 'acc1',
+        domain: 'example.com',
+        subdomain: '',
+        targetIp: '1.1.1.1',
+      }),
+    );
+    expect(stateStore.recordRecordResult).toHaveBeenCalledTimes(2);
+    expect(stateStore.recordSyncOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'partial' }),
+    );
+  });
+
+  it('should record account-level failures and the final outcome', async () => {
+    const stateStore = {
+      recordIpCheck: vi.fn(),
+      recordRecordResult: vi.fn(),
+      recordAccountError: vi.fn(),
+      recordDomainError: vi.fn(),
+      recordSyncOutcome: vi.fn(),
+    };
+    mockUpdateAccount.mockRejectedValueOnce(new Error('OVH unavailable'));
+
+    const service = new UpdaterService(config, mockIpService, mockLogger, stateStore as any);
+    await service.syncAll();
+
+    expect(stateStore.recordAccountError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'acc1',
+        error: 'OVH unavailable',
+      }),
+    );
+    expect(stateStore.recordSyncOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'partial',
+        error: 'OVH unavailable',
+      }),
+    );
+  });
+
+  it('should record zone refresh failures as domain errors', async () => {
+    const stateStore = {
+      recordIpCheck: vi.fn(),
+      recordRecordResult: vi.fn(),
+      recordAccountError: vi.fn(),
+      recordDomainError: vi.fn(),
+      recordSyncOutcome: vi.fn(),
+    };
+    mockUpdateAccount.mockResolvedValueOnce({
+      status: 'partial',
+      domains: [{
+        domain: 'example.com',
+        refresh: 'failed',
+        subdomains: [{
+          domain: 'example.com',
+          subdomain: '',
+          status: 'updated',
+          records: [{ recordId: 1, previousTarget: '0.0.0.1', status: 'updated' }],
+        }],
+      }],
+    });
+
+    const service = new UpdaterService(config, mockIpService, mockLogger, stateStore as any);
+    await service.syncAll();
+
+    expect(stateStore.recordDomainError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'acc1',
+        domain: 'example.com',
+      }),
+    );
+  });
+
+  it('should never break updates when the state store throws', async () => {
+    const fail = vi.fn(() => {
+      throw new Error('state store exploded');
+    });
+    const stateStore = {
+      recordIpCheck: fail,
+      recordRecordResult: fail,
+      recordAccountError: fail,
+      recordSyncOutcome: fail,
+    };
+    mockUpdateAccount.mockResolvedValueOnce({
+      status: 'success',
+      domains: [{
+        domain: 'example.com',
+        refresh: 'ok',
+        subdomains: [{
+          domain: 'example.com',
+          subdomain: '',
+          status: 'updated',
+          records: [{ recordId: 1, previousTarget: '0.0.0.1', status: 'updated' }],
+        }],
+      }],
+    });
+
+    const service = new UpdaterService(config, mockIpService, mockLogger, stateStore as any);
+    const result = await service.syncAll();
+
+    expect(result.details['acc1'].status).toBe('success');
+    expect(mockUpdateAccount).toHaveBeenCalledTimes(2);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'State store update failed',
+    );
   });
 });

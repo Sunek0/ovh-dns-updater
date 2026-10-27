@@ -59,6 +59,11 @@ const appConfigSchema = z.object({
     enabled: z.boolean().default(true),
     interval: z.coerce.number().positive().default(600),
   }).default({ enabled: true, interval: 600 }),
+  ui: z.object({
+    enabled: z.boolean().default(true),
+    historySize: z.coerce.number().int().min(1).max(10000).default(500),
+    refreshSeconds: z.coerce.number().int().min(1).max(3600).default(10),
+  }).default({ enabled: true, historySize: 500, refreshSeconds: 10 }),
   ipProviders: z.array(httpUrl).min(1),
   accounts: z.array(accountSchema).default([]),
 }).superRefine((value, ctx) => {

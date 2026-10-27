@@ -1,6 +1,7 @@
 import rateLimit from '@fastify/rate-limit';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
-import { extractBearerToken, safeEqual } from '../utils/auth.js';
+import { isMasterBearer, safeEqual } from '../utils/auth.js';
+import { addApiResponseHeaders } from '../utils/http.js';
 import { isValidIPv4 } from '../utils/ip.js';
 import { summarizeAccountResult } from '../utils/results.js';
 
@@ -13,6 +14,7 @@ export const RATE_LIMITS = {
 } as const;
 
 const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
+  addApiResponseHeaders(fastify);
   await fastify.register(rateLimit, { global: false });
 
   // Auth hook
@@ -27,10 +29,9 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     if (!isProtected) return;
 
     const expectedApiKey = fastify.config.security.apiKey;
-    const headerToken = extractBearerToken(request.headers.authorization);
 
     // 1. Bearer token: only the master API key is accepted in a header.
-    if (safeEqual(headerToken, expectedApiKey)) {
+    if (isMasterBearer(request.headers.authorization, expectedApiKey)) {
       request.auth = { kind: 'master' };
       return;
     }

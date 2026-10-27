@@ -20,6 +20,7 @@ WORKDIR /usr/src/app
 COPY --from=build --chown=node:node /usr/src/app/dist ./dist
 COPY --from=build --chown=node:node /usr/src/app/node_modules ./node_modules
 COPY --from=build --chown=node:node /usr/src/app/package.json ./package.json
+COPY --from=build --chown=node:node /usr/src/app/public ./public
 COPY --from=build --chown=node:node /usr/src/app/config ./config
 USER node
 EXPOSE 3000

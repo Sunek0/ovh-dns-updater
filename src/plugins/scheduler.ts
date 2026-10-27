@@ -1,5 +1,6 @@
 import fp from 'fastify-plugin';
 import { FastifyPluginAsync } from 'fastify';
+import type { SyncTrigger } from '../services/StateStore.js';
 
 // Simple background scheduler
 const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
@@ -14,7 +15,7 @@ const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
   let startupTimeoutId: NodeJS.Timeout | undefined;
   let syncInProgress = false;
 
-  const runScheduledSync = async (label: string) => {
+  const runScheduledSync = async (label: string, trigger: SyncTrigger) => {
     if (syncInProgress) {
       fastify.log.warn('Previous scheduled sync is still running, skipping this run');
       return;
@@ -22,7 +23,7 @@ const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
 
     syncInProgress = true;
     try {
-      await fastify.updaterService.syncAll();
+      await fastify.updaterService.syncAll(false, undefined, trigger);
     } catch (err) {
       fastify.log.error({ err }, label);
     } finally {
@@ -48,11 +49,11 @@ const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
       fastify.log.info(`Starting background scheduler (${INTERVAL / 1000}s)`);
       
       // Initial run immediately
-      void runScheduledSync('Initial scheduled sync failed');
+      void runScheduledSync('Initial scheduled sync failed', 'startup');
 
       intervalId = setInterval(() => {
         fastify.log.info('Running scheduled sync');
-        void runScheduledSync('Scheduled sync failed');
+        void runScheduledSync('Scheduled sync failed', 'scheduler');
       }, INTERVAL);
     }, 100);
   });

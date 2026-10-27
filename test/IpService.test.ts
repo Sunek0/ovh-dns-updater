@@ -156,4 +156,71 @@ describe('IpService', () => {
 
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
+
+  it('should report the provider that answered and the failed providers', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const reports: any[] = [];
+    (global.fetch as any)
+      .mockRejectedValueOnce(new Error('down'))
+      .mockResolvedValueOnce({
+        ok: true,
+        text: async () => '1.2.3.4',
+      });
+
+    const service = new IpService(
+      providers,
+      mockLogger,
+      30000,
+      report => reports.push(report),
+    );
+    const ip = await service.getPublicIp();
+
+    expect(ip).toBe('1.2.3.4');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      ip: '1.2.3.4',
+      provider: providers[1],
+      failures: [{ provider: providers[0], error: 'down' }],
+    });
+    expect(reports[0].detectedAt).toBeInstanceOf(Date);
+  });
+
+  it('should report every failure when no provider works', async () => {
+    const reports: any[] = [];
+    (global.fetch as any).mockRejectedValue(new Error('down'));
+
+    const service = new IpService(
+      providers,
+      mockLogger,
+      30000,
+      report => reports.push(report),
+    );
+
+    await expect(service.getPublicIp()).rejects.toThrow('Could not determine public IP');
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({ ip: null, provider: null });
+    expect(reports[0].failures).toHaveLength(2);
+  });
+
+  it('should keep detecting the IP when the observer throws', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: async () => '1.2.3.4',
+    });
+
+    const service = new IpService(
+      providers,
+      mockLogger,
+      30000,
+      () => {
+        throw new Error('observer exploded');
+      },
+    );
+
+    await expect(service.getPublicIp()).resolves.toBe('1.2.3.4');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      'IP detection observer failed',
+    );
+  });
 });

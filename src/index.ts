@@ -3,6 +3,8 @@ import { loadConfig } from './config.js';
 import servicesPlugin from './plugins/services.js';
 import schedulerPlugin from './plugins/scheduler.js';
 import apiRoutes from './routes/api.js';
+import statusRoutes from './routes/status.js';
+import uiRoutes from './routes/ui.js';
 
 const start = async () => {
   let appConfig;
@@ -55,7 +57,12 @@ const start = async () => {
     if (appConfig.ondemand.enabled) {
       await fastify.register(apiRoutes, { prefix: '/api' });
     }
-    
+
+    if (appConfig.ui.enabled) {
+      await fastify.register(statusRoutes, { prefix: '/api' });
+      await fastify.register(uiRoutes);
+    }
+
     fastify.get('/health', async () => ({ status: 'ok' }));
 
     // Start
