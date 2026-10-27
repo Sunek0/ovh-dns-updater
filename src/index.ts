@@ -14,18 +14,24 @@ const start = async () => {
   }
 
   const loggerLevel = appConfig.server.logLevel;
+  const prettyLogs =
+    process.env.NODE_ENV !== 'production' || process.env.LOG_PRETTY === 'true';
 
   const fastify = Fastify({
     logger: {
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'HH:MM:ss Z',
-          ignore: 'pid,hostname',
-        },
-      },
       level: loggerLevel,
+      ...(prettyLogs
+        ? {
+            transport: {
+              target: 'pino-pretty',
+              options: {
+                colorize: true,
+                translateTime: 'HH:MM:ss Z',
+                ignore: 'pid,hostname',
+              },
+            },
+          }
+        : {}),
     },
     logController: new LogController({ disableRequestLogging: true }),
     trustProxy: appConfig.server.trustProxy,

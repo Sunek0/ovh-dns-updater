@@ -22,8 +22,8 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) v24 or higher.
-- [pnpm](https://pnpm.io/) v10+.
+- [Node.js](https://nodejs.org/) v24 or higher (recommended: 24.22.1).
+- [pnpm](https://pnpm.io/) v12 or higher (the project pins 12.15.0).
 - OVH API credentials. Create them at [https://api.ovh.com/createToken/](https://api.ovh.com/createToken/). Required rights:
   - `GET /domain/zone/*`
   - `PUT /domain/zone/*`
@@ -127,18 +127,26 @@ Compatible with devices that can only perform GET requests. The `:token` can be 
 ## Running
 
 ```bash
-# Development
+# Development (pretty logs)
 pnpm dev
 
-# Production
-pnpm start
+# Production (JSON logs)
+NODE_ENV=production pnpm start
 ```
+
+In production the logger emits JSON by default. Set `LOG_PRETTY=true` only if you
+explicitly want `pino-pretty` output.
 
 ### Docker
 ```bash
 docker build -t ovh-dns-updater-ng .
 docker run -p 3000:3000 -v ./config:/usr/src/app/config ovh-dns-updater-ng
 ```
+
+The runtime image uses Node 24.22.1, runs as the unprivileged `node` user, emits
+JSON logs and exposes a `HEALTHCHECK` against `/health`. Instance-specific settings
+(including `config/local.yaml`) are intentionally excluded from the build context
+and must be mounted at runtime.
 
 ## Testing
 

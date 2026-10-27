@@ -1,0 +1,4 @@
+# Production overrides belong here when deploying with NODE_ENV=production.
+# Instance-specific secrets should continue to live in config/local.yaml,
+# which is mounted at runtime and excluded from the Docker build context.
+{}

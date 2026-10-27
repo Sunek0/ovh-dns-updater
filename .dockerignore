@@ -1,6 +1,7 @@
 node_modules
 dist
 coverage
+.pnpm-store
 .git
 .gitlab-ci.yml
 .nvmrc
