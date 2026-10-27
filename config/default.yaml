@@ -5,6 +5,9 @@ server:
 
 security:
   apiKey: 'change-me'
+  # Legacy behaviour: allow account path tokens to trigger a global sync.
+  # Keep disabled for proper per-account isolation.
+  allowLegacyGlobalAccountTokens: false
 
 ondemand:
   enabled: true

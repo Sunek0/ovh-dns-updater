@@ -95,6 +95,15 @@ describe('UpdaterService', () => {
     expect(mockUpdateAccount).toHaveBeenCalled();
   });
 
+  it('should sync a specific account with a provided IP', async () => {
+    const service = new UpdaterService(config, mockIpService, mockLogger);
+    const ip = await service.syncAccount('acc1', '9.9.9.9');
+
+    expect(ip).toBe('9.9.9.9');
+    expect(mockIpService.getPublicIp).not.toHaveBeenCalled();
+    expect(mockUpdateAccount).toHaveBeenCalledWith('9.9.9.9');
+  });
+
   it('should still verify with OVH if current IP matches last IP', async () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
     

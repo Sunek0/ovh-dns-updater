@@ -1,3 +1,15 @@
+import 'fastify';
+
+export type AuthContext =
+  | { kind: 'master' }
+  | { kind: 'account'; accountId: string };
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    auth?: AuthContext;
+  }
+}
+
 export interface SubdomainConfig {
   [domain: string]: string;
 }
@@ -32,6 +44,7 @@ export interface AppConfig {
   };
   security: {
     apiKey: string;
+    allowLegacyGlobalAccountTokens?: boolean;
   };
   ondemand: {
     enabled: boolean;

@@ -68,13 +68,13 @@ export class UpdaterService {
     return this.accounts.has(accountId);
   }
 
-  async syncAccount(accountId: string): Promise<string> {
+  async syncAccount(accountId: string, providedIp?: string): Promise<string> {
     const account = this.accounts.get(accountId);
     if (!account) {
       throw new Error(`Account ${accountId} not found`);
     }
 
-    const currentIp = await this.ipService.getPublicIp();
+    const currentIp = providedIp ?? await this.ipService.getPublicIp();
     await account.updateAccount(currentIp);
     return currentIp;
   }

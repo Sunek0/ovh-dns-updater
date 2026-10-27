@@ -24,6 +24,12 @@ const start = async () => {
     logController: new LogController({ disableRequestLogging: true }),
   });
 
+  if (appConfig.security.allowLegacyGlobalAccountTokens) {
+    fastify.log.warn(
+      'security.allowLegacyGlobalAccountTokens is enabled: account tokens can trigger global syncs',
+    );
+  }
+
   try {
     // Custom Plugins
     await fastify.register(servicesPlugin);

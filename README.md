@@ -51,6 +51,7 @@ The project uses `node-config`. Configuration is merged from `config/default.yam
 | `server.port` | HTTP Port | `3000` |
 | `server.logLevel` | Logging level (pino) | `info` |
 | `security.apiKey` | Master token for API access | `change-me` |
+| `security.allowLegacyGlobalAccountTokens` | Allow account tokens to trigger global syncs (legacy) | `false` |
 | `scheduler.enabled` | Enable background checks | `true` |
 | `scheduler.interval` | Interval between checks (seconds) | `600` (10m) |
 | `ondemand.enabled` | Enable the REST API | `true` |
@@ -62,7 +63,7 @@ The project uses `node-config`. Configuration is merged from `config/default.yam
 
 Each account in the `accounts` array can have:
 - `id`: Unique identifier for logging/API.
-- `token`: (Optional) A dedicated token for legacy GET access to this account.
+- `token`: (Optional) A dedicated token for legacy GET access. It is scoped to this account.
 - `credentials`: OVH endpoint and keys.
 - `domains`: List of domains and subdomains (use `@` for root).
 
@@ -94,10 +95,14 @@ All on-demand routes are prefixed with `/api`.
 - `POST /api/accounts/:id/sync`: Sync only a specific account.
 
 ### Legacy / Mikrotik (Requires valid `:token` in path)
-Compatible with devices that can only perform GET requests. The `:token` can be either the `apiKey` or the specific account `token`.
+Compatible with devices that can only perform GET requests. The `:token` can be either the `apiKey` or a specific account `token`.
 
-- `GET /api/:token/checkip`: Trigger a global sync.
-- `GET /api/:token/setip/:ip`: Force a specific IP update for all accounts.
+- `GET /api/:token/checkip`: With the master `apiKey`, trigger a global sync. With an account token, sync only that account.
+- `GET /api/:token/setip/:ip`: With the master `apiKey`, force the IP for all accounts. With an account token, force the IP only for that account.
+
+> The previous global behaviour for account tokens can be restored temporarily with
+> `security.allowLegacyGlobalAccountTokens: true`. It is disabled by default and
+> logs a warning when enabled.
 
 ## Running
 
