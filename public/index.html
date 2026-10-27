@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="no-referrer">
+  <title>DNS Updater · Estado</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">DNS</span>
+          <div>
+            <h1>DNS Updater</h1>
+            <p class="brand-subtitle">Estado de los registros OVH</p>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="last-updated" class="last-updated"></span>
+          <button id="sync-now" class="button button-primary" type="button" hidden>Comprobar ahora</button>
+          <button id="change-key" class="button button-ghost" type="button">Cambiar API key</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <div id="error-banner" class="banner banner-error" role="alert" hidden></div>
+
+      <section class="panel summary" aria-labelledby="summary-title">
+        <h2 id="summary-title" class="sr-only">Resumen del servicio</h2>
+
+        <div class="ip-overview">
+          <div class="ip-block">
+            <span class="eyebrow">IP pública actual</span>
+            <strong id="current-ip" class="ip-value mono">—</strong>
+          </div>
+          <div class="ip-block">
+            <span class="eyebrow">IP inicial</span>
+            <div class="ip-initial-row">
+              <strong id="initial-ip" class="ip-value ip-value-small mono">—</strong>
+              <span id="ip-changed" class="badge badge-updated" hidden>Cambiada</span>
+            </div>
+          </div>
+        </div>
+
+        <dl class="metrics">
+          <div class="metric">
+            <dt>Última comprobación</dt>
+            <dd class="metric-value-row">
+              <span id="last-check-time">—</span>
+              <span id="last-check-status" class="badge badge-pending">Sin datos</span>
+            </dd>
+          </div>
+          <div class="metric">
+            <dt>Próxima comprobación</dt>
+            <dd><span id="next-check-time">—</span></dd>
+          </div>
+          <div class="metric">
+            <dt>Tiempo activo</dt>
+            <dd><span id="uptime">—</span></dd>
+          </div>
+          <div class="metric">
+            <dt>Proveedor de IP</dt>
+            <dd>
+              <span id="ip-provider">—</span>
+              <span id="ip-provider-meta" class="metric-meta"></span>
+            </dd>
+          </div>
+        </dl>
+
+        <div class="summary-footer">
+          <div class="chips">
+            <span id="scheduler-state" class="chip">Programador: —</span>
+            <span id="ondemand-state" class="chip">Bajo demanda: —</span>
+          </div>
+          <div class="counters" aria-label="Contadores">
+            <span class="counter"><strong id="checks-count">0</strong> comprobaciones</span>
+            <span class="counter"><strong id="updates-count">0</strong> actualizaciones</span>
+            <span class="counter"><strong id="errors-count">0</strong> errores</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="accounts-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="accounts-title">Cuentas</h2>
+            <p class="section-subtitle">Registros A gestionados y su estado actual.</p>
+          </div>
+          <span id="accounts-count" class="section-meta"></span>
+        </div>
+        <div id="accounts" class="accounts"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="events-title">
+        <div class="section-heading">
+          <div>
+            <h2 id="events-title">Historial de eventos</h2>
+            <p class="section-subtitle">Últimos cambios, comprobaciones y errores en memoria.</p>
+          </div>
+          <span id="events-count" class="section-meta"></span>
+        </div>
+
+        <div class="filters">
+          <label class="filter">
+            <span>Cuenta</span>
+            <select id="filter-account">
+              <option value="">Todas</option>
+            </select>
+          </label>
+          <label class="filter">
+            <span>Dominio</span>
+            <select id="filter-domain">
+              <option value="">Todos</option>
+            </select>
+          </label>
+          <label class="filter">
+            <span>Tipo de evento</span>
+            <select id="filter-type">
+              <option value="">Todos</option>
+              <option value="updated">Actualizado</option>
+              <option value="unchanged">Sin cambios</option>
+              <option value="error">Error</option>
+              <option value="public_ip_changed">IP pública cambiada</option>
+            </select>
+          </label>
+        </div>
+
+        <ol id="events" class="timeline"></ol>
+      </section>
+    </main>
+  </div>
+
+  <div id="login" class="login-overlay">
+    <form id="login-form" class="login-card">
+      <div class="login-brand">
+        <span class="brand-mark" aria-hidden="true">DNS</span>
+        <span>DNS Updater</span>
+      </div>
+      <h1>Acceso al estado</h1>
+      <p class="login-description">
+        Introduce la API key configurada en <code>security.apiKey</code>.
+      </p>
+      <label for="api-key">API key</label>
+      <input
+        id="api-key"
+        name="api-key"
+        type="password"
+        autocomplete="off"
+        autocapitalize="none"
+        spellcheck="false"
+        required
+      >
+      <p id="login-error" class="form-error" role="alert" hidden></p>
+      <button id="login-submit" class="button button-primary button-block" type="submit">Entrar</button>
+      <p class="login-note">
+        La clave se guarda solo en esta pestaña (sessionStorage) y se envía
+        como token Bearer. No se almacena en el servidor.
+      </p>
+    </form>
+  </div>
+
+  <noscript>
+    <p class="noscript">Esta interfaz necesita JavaScript para mostrar el estado.</p>
+  </noscript>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

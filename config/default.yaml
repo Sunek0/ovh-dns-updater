@@ -2,9 +2,28 @@ server:
   port: 3000
   host: '0.0.0.0'
   logLevel: 'info'
+  # Enable only when the service is behind a trusted reverse proxy.
+  trustProxy: false
 
 security:
-  adminToken: 'change-me'
+  apiKey: 'change-me'
+  # Legacy behaviour: allow account path tokens to trigger a global sync.
+  # Keep disabled for proper per-account isolation.
+  allowLegacyGlobalAccountTokens: false
+
+ondemand:
+  enabled: true
+
+scheduler:
+  enabled: true
+  interval: 600
+
+ui:
+  enabled: true
+  # Maximum number of events kept in memory (circular buffer).
+  historySize: 500
+  # Fallback polling interval used when SSE is unavailable.
+  refreshSeconds: 10
 
 ipProviders:
   - https://api.ipify.org

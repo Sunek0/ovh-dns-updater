@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+.pnpm-store
+.git
+.gitlab-ci.yml
+.nvmrc
+README.md
+test
+config/local.*
+logs
+*.log
+.env
+.env.*
+.vscode
+.idea

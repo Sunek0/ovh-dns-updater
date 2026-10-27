@@ -1,41 +1,107 @@
 import { FastifyBaseLogger } from 'fastify';
+import type { IpDetectionReport, ProviderFailure } from '../types.js';
+import { isValidIPv4 } from '../utils/ip.js';
 
 export class IpService {
   private providers: string[];
   private logger: FastifyBaseLogger;
+  private cacheTtlMs: number;
+  private onDetection?: (report: IpDetectionReport) => void;
+  private cached?: { ip: string; expiresAt: number };
+  private inFlight?: Promise<string>;
 
-  constructor(providers: string[], logger: FastifyBaseLogger) {
+  constructor(
+    providers: string[],
+    logger: FastifyBaseLogger,
+    cacheTtlMs = 30000,
+    onDetection?: (report: IpDetectionReport) => void,
+  ) {
     this.providers = providers;
     this.logger = logger;
+    this.cacheTtlMs = cacheTtlMs;
+    this.onDetection = onDetection;
   }
 
-  async getPublicIp(): Promise<string> {
-    // Shuffle providers to load balance / randomize
-    const shuffled = [...this.providers].sort(() => 0.5 - Math.random());
+  async getPublicIp(force = false): Promise<string> {
+    if (!force && this.cached && this.cached.expiresAt > Date.now()) {
+      this.logger.debug({ ip: this.cached.ip }, 'Using cached public IP');
+      return this.cached.ip;
+    }
+
+    if (this.inFlight) {
+      return this.inFlight;
+    }
+
+    const request = this.fetchPublicIp()
+      .then(ip => {
+        this.cached = { ip, expiresAt: Date.now() + this.cacheTtlMs };
+        return ip;
+      })
+      .finally(() => {
+        this.inFlight = undefined;
+      });
+
+    this.inFlight = request;
+    return request;
+  }
+
+  private notifyDetection(report: IpDetectionReport): void {
+    if (!this.onDetection) return;
+
+    try {
+      this.onDetection(report);
+    } catch (err) {
+      // Observability must never break IP detection or the DNS update path.
+      this.logger.warn({ err }, 'IP detection observer failed');
+    }
+  }
+
+  private async fetchPublicIp(): Promise<string> {
+    // Fisher-Yates shuffle to balance providers without the sort() bias.
+    const shuffled = [...this.providers];
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+      const target = Math.floor(Math.random() * (index + 1));
+      [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+    }
+
+    const failures: ProviderFailure[] = [];
 
     for (const provider of shuffled) {
       try {
         this.logger.debug({ provider }, 'Fetching IP from provider');
         const response = await fetch(provider, { signal: AbortSignal.timeout(5000) });
-        
+
         if (!response.ok) {
           throw new Error(`Status ${response.status}`);
         }
 
         const ip = (await response.text()).trim();
-        
-        // Basic IPv4 validation
-        if (!/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip)) {
-           throw new Error(`Invalid IP format received: ${ip}`);
+
+        if (!isValidIPv4(ip)) {
+          throw new Error(`Invalid IP format received: ${ip}`);
         }
 
         this.logger.info({ provider, ip }, 'Public IP detected');
+        this.notifyDetection({
+          ip,
+          provider,
+          failures,
+          detectedAt: new Date(),
+        });
         return ip;
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        failures.push({ provider, error: message });
         this.logger.warn({ provider, err }, 'Failed to fetch IP from provider, trying next...');
       }
     }
 
+    this.notifyDetection({
+      ip: null,
+      provider: null,
+      failures,
+      detectedAt: new Date(),
+    });
     throw new Error('Could not determine public IP from any provider');
   }
 }

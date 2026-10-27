@@ -1,51 +1,92 @@
-import Fastify from 'fastify';
-import sensible from '@fastify/sensible';
-import config from 'config';
-import { AppConfig } from './types.js';
+import Fastify, { LogController } from 'fastify';
+import { loadConfig } from './config.js';
 import servicesPlugin from './plugins/services.js';
 import schedulerPlugin from './plugins/scheduler.js';
 import apiRoutes from './routes/api.js';
+import statusRoutes from './routes/status.js';
+import uiRoutes from './routes/ui.js';
 
 const start = async () => {
-  const appConfig = config.util.toObject() as AppConfig;
-  const loggerLevel = appConfig.server?.logLevel || 'info';
+  let appConfig;
+  try {
+    appConfig = loadConfig();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+
+  const loggerLevel = appConfig.server.logLevel;
+  const prettyLogs =
+    process.env.NODE_ENV !== 'production' || process.env.LOG_PRETTY === 'true';
 
   const fastify = Fastify({
     logger: {
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          colorize: true,
-          translateTime: 'HH:MM:ss Z',
-          ignore: 'pid,hostname',
-        },
-      },
       level: loggerLevel,
+      ...(prettyLogs
+        ? {
+            transport: {
+              target: 'pino-pretty',
+              options: {
+                colorize: true,
+                translateTime: 'HH:MM:ss Z',
+                ignore: 'pid,hostname',
+              },
+            },
+          }
+        : {}),
     },
-    disableRequestLogging: true, // Optional: more clean logs for this type of app
+    logController: new LogController({ disableRequestLogging: true }),
+    trustProxy: appConfig.server.trustProxy,
   });
 
-  try {
-    // Core Plugins
-    await fastify.register(sensible);
+  if (appConfig.security.allowLegacyGlobalAccountTokens) {
+    fastify.log.warn(
+      'security.allowLegacyGlobalAccountTokens is enabled: account tokens can trigger global syncs',
+    );
+  }
 
+  try {
     // Custom Plugins
-    await fastify.register(servicesPlugin);
-    await fastify.register(schedulerPlugin);
+    await fastify.register(servicesPlugin, { appConfig });
+
+    if (appConfig.scheduler.enabled) {
+      await fastify.register(schedulerPlugin);
+    }
 
     // Routes
-    await fastify.register(apiRoutes, { prefix: '/api' });
-    
+    if (appConfig.ondemand.enabled) {
+      await fastify.register(apiRoutes, { prefix: '/api' });
+    }
+
+    if (appConfig.ui.enabled) {
+      await fastify.register(statusRoutes, { prefix: '/api' });
+      await fastify.register(uiRoutes);
+    }
+
     fastify.get('/health', async () => ({ status: 'ok' }));
 
     // Start
-    const port = Number(appConfig.server.port) || 3000;
-    const host = appConfig.server.host || '0.0.0.0';
+    const port = appConfig.server.port;
+    const host = appConfig.server.host;
     
     fastify.log.debug({ port, host }, 'Attempting to start server');
     const address = await fastify.listen({ port, host });
 
     fastify.log.info(`Server listening at ${address}`);
+
+    const shutdown = async (signal: NodeJS.Signals) => {
+      fastify.log.info({ signal }, 'Shutting down');
+      try {
+        await fastify.close();
+        process.exit(0);
+      } catch (err) {
+        fastify.log.error(err);
+        process.exit(1);
+      }
+    };
+
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

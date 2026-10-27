@@ -1,0 +1,14 @@
+overrides:
+  vite: 8.3.5
+
+allowBuilds:
+  esbuild: true
+
+# Versions published less than 24h ago at update time. They are allowed once,
+# while the default minimumReleaseAge policy keeps protecting future updates.
+minimumReleaseAgeExclude:
+  - rollup
+  - '@rollup/*'
+  - fast-copy@4.3.1
+  - magic-string@1.4.4
+  - postcss@8.5.32
