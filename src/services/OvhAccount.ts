@@ -5,6 +5,7 @@ import {
   AccountSyncResult,
   AccountSyncStatus,
   DomainSyncResult,
+  RecordSyncResult,
   SubdomainSyncResult,
 } from '../types.js';
 
@@ -66,7 +67,12 @@ export class OvhAccount {
         try {
           const result = await this.updateRecord(domainName, sub, publicIp);
           domainResult.subdomains.push(result);
-          if (result.status === 'updated') domainUpdated = true;
+          if (
+            result.status === 'updated' ||
+            result.records?.some(record => record.status === 'updated')
+          ) {
+            domainUpdated = true;
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.error({ domain: domainName, sub, err }, 'Failed to update subdomain');
@@ -104,7 +110,7 @@ export class OvhAccount {
     sub: string,
     targetIp: string,
   ): Promise<SubdomainSyncResult> {
-    // 1. Find the record ID
+    // 1. Find all A record IDs for the subdomain
     const records = await this.request<number[]>('GET', `/domain/zone/${domain}/record`, {
       fieldType: 'A',
       subDomain: sub || undefined,
@@ -115,39 +121,101 @@ export class OvhAccount {
       return { domain, subdomain: sub, status: 'not-found' };
     }
 
-    // usually one record per type/subdomain
-    const recordId = records[0];
+    const strategy = this.config.recordStrategy ?? 'all';
 
-    // 2. Get current value from OVH to verify if update is needed
-    const recordData = await this.request<{ target: string }>('GET', `/domain/zone/${domain}/record/${recordId}`);
-
-    if (recordData.target === targetIp) {
-      this.logger.debug({ domain, sub, ip: targetIp }, 'IP already matches in OVH, skipping update');
-      return { domain, subdomain: sub, status: 'unchanged' };
+    if (strategy === 'fail' && records.length !== 1) {
+      const error = `Expected exactly one A record, found ${records.length}`;
+      this.logger.error({ domain, sub, count: records.length }, error);
+      return { domain, subdomain: sub, status: 'failed', error, records: [] };
     }
 
-    // 3. Perform the update since it's different
-    this.logger.info({ domain, sub, oldIp: recordData.target, newIp: targetIp }, 'IP desynchronized in OVH, updating record');
-    await this.request('PUT', `/domain/zone/${domain}/record/${recordId}`, {
-      target: targetIp,
-      subDomain: sub || undefined,
-    });
+    if (strategy === 'single' && records.length > 1) {
+      this.logger.warn(
+        { domain, sub, count: records.length },
+        'Multiple A records found, updating only the first',
+      );
+    }
 
-    return { domain, subdomain: sub, status: 'updated' };
+    const selectedRecords = strategy === 'single' ? records.slice(0, 1) : records;
+    const recordResults: RecordSyncResult[] = [];
+
+    for (const recordId of selectedRecords) {
+      try {
+        // 2. Get current value from OVH to verify if update is needed
+        const recordData = await this.request<{ target: string }>(
+          'GET',
+          `/domain/zone/${domain}/record/${recordId}`,
+        );
+
+        if (recordData.target === targetIp) {
+          this.logger.debug({ domain, sub, recordId, ip: targetIp }, 'IP already matches in OVH, skipping update');
+          recordResults.push({
+            recordId,
+            previousTarget: recordData.target,
+            status: 'unchanged',
+          });
+          continue;
+        }
+
+        // 3. Perform the update since it is different
+        this.logger.info(
+          { domain, sub, recordId, oldIp: recordData.target, newIp: targetIp },
+          'IP desynchronized in OVH, updating record',
+        );
+        await this.request('PUT', `/domain/zone/${domain}/record/${recordId}`, {
+          target: targetIp,
+          subDomain: sub || undefined,
+        });
+
+        recordResults.push({
+          recordId,
+          previousTarget: recordData.target,
+          status: 'updated',
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error({ domain, sub, recordId, err }, 'Failed to update record');
+        recordResults.push({ recordId, status: 'failed', error: message });
+      }
+    }
+
+    const failed = recordResults.filter(record => record.status === 'failed').length;
+    const updated = recordResults.filter(record => record.status === 'updated').length;
+    const unchanged = recordResults.filter(record => record.status === 'unchanged').length;
+
+    if (failed > 0) {
+      return {
+        domain,
+        subdomain: sub,
+        status: updated > 0 || unchanged > 0 ? 'partial' : 'failed',
+        error: `${failed} of ${recordResults.length} records failed`,
+        records: recordResults,
+      };
+    }
+
+    return {
+      domain,
+      subdomain: sub,
+      status: updated > 0 ? 'updated' : 'unchanged',
+      records: recordResults,
+    };
   }
 }
 
 export function summarizeAccountStatus(domains: DomainSyncResult[]): AccountSyncStatus {
   const subdomains = domains.flatMap(domain => domain.subdomains);
-  const problematic = subdomains.filter(
+  const failed = subdomains.filter(
     subdomain => subdomain.status === 'failed' || subdomain.status === 'not-found',
   ).length;
-  const successful = subdomains.length - problematic;
+  const partial = subdomains.filter(subdomain => subdomain.status === 'partial').length;
+  const successful = subdomains.filter(
+    subdomain => subdomain.status === 'updated' || subdomain.status === 'unchanged',
+  ).length;
 
   let status: AccountSyncStatus;
-  if (problematic === 0) {
+  if (failed === 0 && partial === 0) {
     status = 'success';
-  } else if (successful === 0) {
+  } else if (successful === 0 && partial === 0) {
     status = 'failed';
   } else {
     status = 'partial';

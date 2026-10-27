@@ -117,6 +117,71 @@ describe('configuration validation', () => {
     expect(() => validateConfig(raw)).toThrow(/ipProviders\.0/);
   });
 
+  it('accepts the production-style config with wildcard subdomains', () => {
+    const raw = {
+      server: { port: 3000, host: '0.0.0.0', logLevel: 'info' },
+      security: { apiKey: 'xxx' },
+      ondemand: { enabled: true },
+      scheduler: { enabled: true, interval: 600 },
+      ipProviders: [
+        'https://api.ipify.org',
+        'https://ifconfig.me/ip',
+        'https://icanhazip.com',
+      ],
+      accounts: [
+        {
+          id: 'personal-account',
+          provider: 'ovh',
+          enabled: true,
+          credentials: {
+            endpoint: 'ovh-eu',
+            appKey: 'xxx',
+            appSecret: 'xxx',
+            consumerKey: 'xxx',
+          },
+          domains: [
+            { name: 'jacko.es', subdomains: ['@', '*'] },
+            { name: 'suneko.es', subdomains: ['@', '*'] },
+            { name: 'efimero.ovh', subdomains: ['@', '*'] },
+            { name: 'danielbarreiro.es', subdomains: ['@', '*'] },
+            { name: 'barreirofuentes.es', subdomains: ['@', '*'] },
+          ],
+        },
+        {
+          id: 'puertacartuja-account',
+          provider: 'ovh',
+          enabled: true,
+          credentials: {
+            endpoint: 'ovh-eu',
+            appKey: 'xxx',
+            appSecret: 'xxx',
+            consumerKey: 'xxx',
+          },
+          domains: [
+            {
+              name: 'puertacartuja.es',
+              subdomains: ['cajafuerte', 'identidad', 'wiki'],
+            },
+          ],
+        },
+      ],
+    };
+
+    const config = validateConfig(raw);
+
+    expect(config.accounts).toHaveLength(2);
+    expect(config.accounts[0].domains[0].subdomains).toEqual(['@', '*']);
+    expect(config.accounts.every(account => account.recordStrategy === 'all')).toBe(true);
+    expect(config.security.allowLegacyGlobalAccountTokens).toBe(false);
+  });
+
+  it('rejects an unknown record strategy', () => {
+    const raw = validConfig();
+    (raw.accounts[0] as any).recordStrategy = 'random';
+
+    expect(() => validateConfig(raw)).toThrow(/accounts\.0\.recordStrategy/);
+  });
+
   it('does not leak credential values in validation errors', () => {
     const raw = validConfig();
     raw.accounts[0].credentials.appSecret = '';

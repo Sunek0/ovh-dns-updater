@@ -70,13 +70,18 @@ Each account in the `accounts` array can have:
 - `id`: Unique identifier for logging/API.
 - `token`: (Optional) A dedicated token for legacy GET access. It is scoped to this account.
 - `credentials`: OVH endpoint and keys. `timeout` is optional and defaults to 30 seconds.
-- `domains`: List of domains and subdomains (use `@` for root).
+- `domains`: List of domains and subdomains (use `@` for root and `*` for a wildcard).
+- `recordStrategy`: How to handle multiple A records for the same subdomain:
+  - `all` (default): update every A record.
+  - `single`: update only the first record and log a warning.
+  - `fail`: reject the update if there is not exactly one A record.
 
 ```yaml
 accounts:
   - id: 'my-home-server'
     token: 'my-secret-path-token'
     enabled: true
+    recordStrategy: 'all'
     credentials:
       endpoint: 'ovh-eu'
       appKey: '...'

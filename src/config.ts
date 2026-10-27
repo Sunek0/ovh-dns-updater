@@ -36,6 +36,7 @@ const accountSchema = z.object({
   provider: z.literal('ovh').default('ovh'),
   enabled: z.boolean().optional(),
   token: nonEmptyString.optional(),
+  recordStrategy: z.enum(['all', 'single', 'fail']).default('all'),
   credentials: credentialsSchema,
   domains: z.array(domainSchema).default([]),
 });

@@ -38,8 +38,12 @@ export class IpService {
   }
 
   private async fetchPublicIp(): Promise<string> {
-    // Shuffle providers to load balance / randomize
-    const shuffled = [...this.providers].sort(() => 0.5 - Math.random());
+    // Fisher-Yates shuffle to balance providers without the sort() bias.
+    const shuffled = [...this.providers];
+    for (let index = shuffled.length - 1; index > 0; index -= 1) {
+      const target = Math.floor(Math.random() * (index + 1));
+      [shuffled[index], shuffled[target]] = [shuffled[target], shuffled[index]];
+    }
 
     for (const provider of shuffled) {
       try {

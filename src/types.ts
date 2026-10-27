@@ -27,13 +27,28 @@ export interface OvhCredentials {
   timeout?: number; // milliseconds, defaults to 30000
 }
 
-export type SubdomainSyncStatus = 'updated' | 'unchanged' | 'not-found' | 'failed';
+export type SubdomainSyncStatus =
+  | 'updated'
+  | 'unchanged'
+  | 'not-found'
+  | 'partial'
+  | 'failed';
+
+export type OvhRecordStrategy = 'all' | 'single' | 'fail';
+
+export interface RecordSyncResult {
+  recordId: number;
+  previousTarget?: string;
+  status: 'updated' | 'unchanged' | 'failed';
+  error?: string;
+}
 
 export interface SubdomainSyncResult {
   domain: string;
   subdomain: string;
   status: SubdomainSyncStatus;
   error?: string;
+  records?: RecordSyncResult[];
 }
 
 export type RefreshStatus = 'ok' | 'failed' | 'not-needed';
@@ -57,6 +72,7 @@ export interface AccountConfig {
   provider: 'ovh';
   enabled?: boolean;
   token?: string; // Legacy access token
+  recordStrategy?: OvhRecordStrategy;
   credentials: OvhCredentials;
   domains: DomainConfig[];
 }

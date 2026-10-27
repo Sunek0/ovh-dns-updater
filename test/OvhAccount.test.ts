@@ -66,9 +66,19 @@ describe('OvhAccount', () => {
     expect(mockRequest).toHaveBeenCalledWith('POST', '/domain/zone/example.com/refresh', undefined, expect.any(Function));
     expect(result.status).toBe('success');
     expect(result.domains[0].refresh).toBe('ok');
-    expect(result.domains[0].subdomains).toEqual([
-      { domain: 'example.com', subdomain: '', status: 'updated' },
-      { domain: 'example.com', subdomain: 'www', status: 'unchanged' }
+    expect(result.domains[0].subdomains).toMatchObject([
+      {
+        domain: 'example.com',
+        subdomain: '',
+        status: 'updated',
+        records: [{ recordId: 123, previousTarget: '1.2.3.4', status: 'updated' }]
+      },
+      {
+        domain: 'example.com',
+        subdomain: 'www',
+        status: 'unchanged',
+        records: [{ recordId: 456, previousTarget: '1.1.1.1', status: 'unchanged' }]
+      }
     ]);
   });
 
@@ -85,8 +95,13 @@ describe('OvhAccount', () => {
 
     expect(result.status).toBe('partial');
     expect(result.domains[0].refresh).toBe('ok');
-    expect(result.domains[0].subdomains).toEqual([
-      { domain: 'example.com', subdomain: '', status: 'updated' },
+    expect(result.domains[0].subdomains).toMatchObject([
+      {
+        domain: 'example.com',
+        subdomain: '',
+        status: 'updated',
+        records: [{ recordId: 123, previousTarget: '1.2.3.4', status: 'updated' }]
+      },
       {
         domain: 'example.com',
         subdomain: 'www',
@@ -94,6 +109,102 @@ describe('OvhAccount', () => {
         error: expect.stringContaining('Subdomain failure')
       }
     ]);
+  });
+
+  it('should update all A records with the default strategy', async () => {
+    const multiRecordConfig = {
+      ...config,
+      recordStrategy: 'all',
+      domains: [{ name: 'example.com', subdomains: ['www'] }]
+    };
+
+    mockRequest
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123, 456])) // www IDs
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.2.3.4' })) // 123 details
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})) // 123 PUT
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.2.3.5' })) // 456 details
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})) // 456 PUT
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})); // refresh
+
+    const account = new OvhAccount(multiRecordConfig, mockLogger);
+    const result = await account.updateAccount('9.9.9.9');
+
+    expect(result.status).toBe('success');
+    expect(result.domains[0].refresh).toBe('ok');
+    expect(result.domains[0].subdomains[0]).toMatchObject({
+      status: 'updated',
+      records: [
+        { recordId: 123, previousTarget: '1.2.3.4', status: 'updated' },
+        { recordId: 456, previousTarget: '1.2.3.5', status: 'updated' }
+      ]
+    });
+    expect(mockRequest.mock.calls.filter(call => call[0] === 'PUT')).toHaveLength(2);
+  });
+
+  it('should reject multiple A records with the fail strategy', async () => {
+    const multiRecordConfig = {
+      ...config,
+      recordStrategy: 'fail',
+      domains: [{ name: 'example.com', subdomains: ['www'] }]
+    };
+
+    mockRequest
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123, 456]));
+
+    const account = new OvhAccount(multiRecordConfig, mockLogger);
+    const result = await account.updateAccount('9.9.9.9');
+
+    expect(result.status).toBe('failed');
+    expect(result.domains[0].subdomains[0]).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('Expected exactly one A record, found 2')
+    });
+    expect(mockRequest.mock.calls.filter(call => call[0] === 'PUT')).toHaveLength(0);
+  });
+
+  it('should update only the first A record with the single strategy', async () => {
+    const multiRecordConfig = {
+      ...config,
+      recordStrategy: 'single',
+      domains: [{ name: 'example.com', subdomains: ['www'] }]
+    };
+
+    mockRequest
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123, 456])) // www IDs
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, { target: '1.2.3.4' })) // 123 details
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})) // 123 PUT
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})); // refresh
+
+    const account = new OvhAccount(multiRecordConfig, mockLogger);
+    const result = await account.updateAccount('9.9.9.9');
+
+    expect(result.status).toBe('success');
+    expect(result.domains[0].subdomains[0].records).toHaveLength(1);
+    expect(result.domains[0].subdomains[0].records?.[0].recordId).toBe(123);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ count: 2 }),
+      'Multiple A records found, updating only the first'
+    );
+    expect(mockRequest.mock.calls.filter(call => call[0] === 'PUT')).toHaveLength(1);
+  });
+
+  it('should preserve wildcard subdomains', async () => {
+    const wildcardConfig = {
+      ...config,
+      domains: [{ name: 'example.com', subdomains: ['@', '*'] }]
+    };
+
+    mockRequest.mockImplementation((m, p, pa, cb) => cb(null, []));
+
+    const account = new OvhAccount(wildcardConfig, mockLogger);
+    const result = await account.updateAccount('1.1.1.1');
+
+    const getCalls = mockRequest.mock.calls.filter(
+      call => call[0] === 'GET' && call[1].includes('/record')
+    );
+    expect(getCalls[0][2].subDomain).toBeUndefined();
+    expect(getCalls[1][2].subDomain).toBe('*');
+    expect(result.domains[0].subdomains.map(subdomain => subdomain.subdomain)).toEqual(['', '*']);
   });
 
   it('should handle OVH API errors globally', async () => {
