@@ -328,7 +328,7 @@ Las imágenes quedan en:
 
 ```text
 ghcr.io/sunek0/ovh-dns-updater:latest
-ghcr.io/sunek0/ovh-dns-updater:1.0.0
+ghcr.io/sunek0/ovh-dns-updater:1.0.1
 ```
 
 Si el paquete está privado, hace falta autenticarse:
