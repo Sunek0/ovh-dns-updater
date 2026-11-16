@@ -50,17 +50,20 @@ pnpm test:coverage  # Vitest with V8 coverage into coverage/
   `LOG_PRETTY=true` enables `pino-pretty`. Outside Docker with
   `NODE_ENV=production`, set `SUPPRESS_STRICTNESS_CHECK=true` to silence
   `node-config`'s missing-production-file warning.
-- Configuration is merged by `node-config` from `config/default.yaml`,
-  environment variables, and `config/local.yml` (or `config/local.yaml`), then
-  validated by Zod in `src/config.ts`. Invalid configuration aborts startup.
+- Configuration is merged by `node-config` from `config/default.yaml`, the
+  instance file `config/local.yml`/`config/local.yaml`, and optionally the
+  `NODE_CONFIG` JSON environment variable; there is no per-key env mapping.
+  It is validated by Zod in `src/config.ts`. Invalid configuration aborts startup.
 - `config/local.*` is intentionally excluded from Git and Docker. Never add real
   OVH credentials, account tokens, or the API key to tracked files, tests,
   docs, examples, or logs.
 
 ## Architecture
 
-- `src/index.ts`: bootstraps Fastify, loads/validates config, conditionally
-  registers plugins and routes, installs SIGINT/SIGTERM shutdown.
+- `src/index.ts`: loads/validates config, starts the server, installs
+  SIGINT/SIGTERM shutdown and enforces a graceful-shutdown timeout.
+- `src/app.ts`: builds the Fastify instance and conditionally registers plugins
+  and routes (`buildServer`), without listening. Used by startup and tests.
 - `src/plugins/services.ts`: creates and decorates Fastify with `config`,
   `stateStore`, and `updaterService`. Plugin is wrapped in `fastify-plugin` so
   decorators are visible to sibling plugins.
@@ -92,16 +95,19 @@ the DNS update path.
 - Run all tests with `pnpm test`; run a subset with
   `pnpm vitest run test/OvhAccount.test.ts` or filter by name with
   `pnpm vitest run -t "pattern"`.
-- Tests live in `test/*.test.ts`, one suite per source module. Use
-  `describe`/`it` from Vitest and `supertest` for HTTP behavior.
+- Tests live in `test/*.test.ts`, grouped by the source module they cover.
+  Focused sub-suites (scheduler, streaming, rate limiting) may live alongside
+  the closest module test. Use `describe`/`it` from Vitest and `supertest` for
+  HTTP behavior where it fits.
 - Mock OVH and network boundaries (`vi.mock`, fake services, fake loggers).
   Never call real OVH, real IP providers, or use real credentials in tests.
 - Use obviously fake secrets of at least 32 characters with at least 8 distinct
   characters when a test needs an accepted key/token.
 - Add or update tests for every behavior change, including failure paths and
-  secret-redaction guarantees. The README targets 90%+ coverage; CI enforces
-  `pnpm test:coverage`.
-- Current suite: 10 files / 118 tests. Coverage output goes to `coverage/`
+  secret-redaction guarantees. `pnpm test:coverage` enforces server-side
+  thresholds (statements ≥92 %, lines ≥93 %, branches ≥82 %, functions ≥95 %);
+  `src/index.ts` (process bootstrap) and type-only files are excluded.
+- Current suite: 10 files / 151 tests. Coverage output goes to `coverage/`
   (gitignored, uploaded as a CI artifact).
 
 ## Code Style
@@ -110,7 +116,10 @@ the DNS update path.
 - ESM imports must include the `.js` extension even in `.ts` files
   (for example `import { loadConfig } from './config.js';`).
 - Match the existing formatting: 2-space indentation, single quotes, semicolons,
-  trailing commas, small focused functions, and named exports.
+  trailing commas, small focused functions, and named exports. Fastify plugins
+  and route modules are the exception: they use default exports because that is
+  the registration idiom. Existing test files use 4-space blocks; match the
+  file you are editing and do not reformat unrelated code.
 - No ESLint/Prettier script is configured. Match surrounding style; do not
   reformat unrelated code.
 - Keep shared domain types in `src/types.ts`; use Fastify declaration merging
@@ -143,7 +152,16 @@ the DNS update path.
 - Use constant-time comparisons (`safeEqual`) for secrets; never log them.
 - When the API or UI is enabled, `security.apiKey` must be at least 32 chars,
   non-placeholder, and have at least 8 distinct characters. Enabled account
-  tokens follow the same rules when `ondemand.enabled` is true.
+  tokens follow the same rules when `ondemand.enabled` is true. Secrets must not
+  contain whitespace or control characters.
+- IP providers must use HTTPS unless `security.allowInsecureIpProviders` is
+  explicitly enabled, and provider URLs must not embed credentials. Detected
+  addresses must be globally routable IPv4; private, loopback, link-local and
+  reserved ranges are rejected.
+- Configuration schemas are strict: unknown keys abort startup. `scheduler.interval`
+  must be an integer between 10 and 2,147,483 seconds.
+- Error text returned to clients is generic; full (redacted) diagnostics stay in
+  the server logs and the authenticated in-memory state store.
 - Keep rate limits in `src/routes/api.ts` (`RATE_LIMITS`) and the standard
   `Cache-Control: no-store` / `X-Content-Type-Options: nosniff` headers for API
   responses.

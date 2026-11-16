@@ -2,7 +2,7 @@
 
 [![Build Status](https://img.shields.io/badge/status-active-brightgreen.svg)]()
 [![Type](https://img.shields.io/badge/stack-Fastify%20|%20TypeScript%20|%20Vitest-blue.svg)]()
-[![Coverage](https://img.shields.io/badge/coverage-95%25-brightgreen.svg)]()
+[![Coverage](https://img.shields.io/badge/coverage-93%25-brightgreen.svg)]()
 
 A modern, dynamic DNS updater for OVH accounts. It monitors your public IP address and automatically updates specified OVH DNS A-records.
 
@@ -11,6 +11,8 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 - **Multi-Account/Multi-Tenancy**: Manage completely different OVH accounts (different app keys/secrets) within a single instance.
 - **Resilient IP Detection**: Rotates between providers (`ipify.org`, `ifconfig.me`, `icanhazip.com`) to ensure detection works even if some services are down.
 - **Root Domain Support**: Automatic normalization of `@` to root record updates.
+- **Record Safety**: Missing A records are reported as `not-found`; the updater
+  never creates records and never touches a different `subDomain`.
 - **Legacy Compatibility**: Support for Mikrotik-style scripts via GET requests with tokens in the URL.
 - **Smart Sync**:
   - **Background Scheduler**: Periodically checks and updates records (default: every 10 mins).
@@ -26,7 +28,7 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) v24 or higher (recommended: 24.22.1).
-- [pnpm](https://pnpm.io/) v12 or higher (the project pins 12.15.0).
+- [pnpm](https://pnpm.io/) v12 or higher (the project pins 12.21.0).
 - OVH API credentials. Create them at [https://api.ovh.com/createToken/](https://api.ovh.com/createToken/). Required rights:
   - `GET /domain/zone/*`
   - `PUT /domain/zone/*`
@@ -53,27 +55,38 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 ## Configuration
 
 The project uses `node-config`. Configuration is merged from `config/default.yaml`,
-environment variables, and the instance file `config/local.yml` (or `config/local.yaml`).
+the instance file `config/local.yml` (or `config/local.yaml`), and optionally
+the `NODE_CONFIG` JSON environment variable. There is no per-key environment
+variable mapping (for example `SECURITY_APIKEY` is not read automatically).
 
-The merged configuration is validated at startup. Invalid values, duplicate account IDs,
-duplicate tokens, malformed provider URLs or unsupported OVH endpoints abort the process
-with a clear error that does not include secret values. A failure to initialize an
-enabled account also aborts startup instead of leaving it silently disabled. When
-`ondemand.enabled` or `ui.enabled` is true, placeholder/short `security.apiKey` values
-are rejected; when `ondemand.enabled` is true, the same applies to enabled account
-`token` values.
+The merged configuration is validated at startup. Unknown keys are rejected,
+invalid values, duplicate account IDs, duplicate tokens, malformed or insecure
+provider URLs and unsupported OVH endpoints abort the process with a clear
+error that does not include secret values. `security.apiKey` and account
+tokens must not contain whitespace or control characters. `scheduler.interval`
+must be a whole number between 10 and 2,147,483 seconds. A failure to initialize
+an enabled account also aborts startup instead of leaving it silently disabled.
+When `ondemand.enabled` or `ui.enabled` is true, placeholder/short
+`security.apiKey` values are rejected; when `ondemand.enabled` is true, the same
+applies to enabled account `token` values. IP providers must use HTTPS unless
+`security.allowInsecureIpProviders` is explicitly enabled, and provider URLs
+with embedded credentials are rejected. Detected addresses are validated as
+globally routable IPv4; private, loopback, link-local and reserved ranges are
+refused before touching OVH.
 
 ### Settings Overview
 
 | Path | Description | Default |
 | :--- | :--- | :--- |
 | `server.port` | HTTP Port | `3000` |
+| `server.host` | Bind address | `0.0.0.0` |
 | `server.logLevel` | Logging level (pino) | `info` |
 | `server.trustProxy` | Trust `X-Forwarded-*` headers (only behind a trusted proxy) | `false` |
 | `security.apiKey` | Master token for API/UI access (min 32 chars, non-placeholder when enabled) | `change-me` |
 | `security.allowLegacyGlobalAccountTokens` | Allow account tokens to trigger global syncs (legacy) | `false` |
+| `security.allowInsecureIpProviders` | Allow `http://` IP providers (insecure) | `false` |
 | `scheduler.enabled` | Enable background checks | `true` |
-| `scheduler.interval` | Interval between checks (seconds) | `600` (10m) |
+| `scheduler.interval` | Interval between checks (seconds, 10–2,147,483) | `600` (10m) |
 | `ondemand.enabled` | Enable the REST API | `true` |
 | `ui.enabled` | Serve the web UI and its status API | `true` |
 | `ui.historySize` | Events kept in the in-memory circular buffer | `500` |
@@ -81,9 +94,10 @@ are rejected; when `ondemand.enabled` is true, the same applies to enabled accou
 
 > **Security:** change `security.apiKey` before exposing the service. When the API or
 > UI is enabled, startup fails if the key is a known placeholder (`change-me`, the
-> example below, etc.), shorter than 32 characters, or obviously repetitive. Generate
-> one with `openssl rand -hex 32`. Enabled account `token` values must be at least 32
-> characters and non-placeholder when `ondemand.enabled` is true.
+> example below, etc.), shorter than 32 characters, has fewer than 8 distinct
+> characters, or contains whitespace/control characters. Generate one with
+> `openssl rand -hex 32`. Enabled account `token` values follow the same rules when
+> `ondemand.enabled` is true.
 
 ### Account Configuration
 
@@ -136,6 +150,7 @@ security:
   #   openssl rand -hex 32
   apiKey: 'CAMBIAR_POR_UNA_CLAVE_LARGA_Y_ALEATORIA'
   allowLegacyGlobalAccountTokens: false
+  allowInsecureIpProviders: false
 
 ondemand:
   enabled: true
@@ -275,6 +290,8 @@ Sync responses include `results` with a per-account summary (`Success`, `Partial
 
 Exceeding a limit returns `429 Too Many Requests`. The detected public IP is cached
 for 30 seconds, and concurrent detections share a single upstream request.
+`POST /api/sync` forces a fresh detection and bypasses that cache; the other
+on-demand endpoints may reuse it.
 
 If the service runs behind a reverse proxy, enable `server.trustProxy` so rate limits
 use the real client IP. Do not enable it when the service is directly exposed.
@@ -335,7 +352,9 @@ git push github --tags
 
 - Ejecuta tests, typecheck, build y auditoría antes de publicar.
 - Publica imágenes multiarquitectura `linux/amd64` y `linux/arm64`.
-- Etiquetas generadas: `X.Y.Z`, `X.Y`, `latest` y `sha-<commit>`.
+- Etiquetas generadas en un push de tag: `X.Y.Z`, `X.Y`, `latest` y `sha-<commit>`.
+- El despacho manual exige que el tag (`vX.Y.Z`) exista, construye ese commit y
+  no mueve `latest`; úsalo solo para republicar una versión concreta.
 - No requiere secretos adicionales: usa el `GITHUB_TOKEN` integrado.
 
 Para publicar una release existente que no tenga el workflow en su commit
@@ -362,7 +381,10 @@ pública en **Packages → ovh-dns-updater → Package settings**.
 
 ## Testing
 
-The project maintains high coverage (90%+) using Vitest.
+The project enforces server-side coverage thresholds with `pnpm test:coverage`
+(≥92 % statements, ≥93 % lines, ≥82 % branches and ≥95 % functions). The
+process bootstrap (`src/index.ts`) and type-only files are excluded; the static
+UI is covered by manual checks.
 
 ```bash
 pnpm typecheck     # Type-check source and tests
