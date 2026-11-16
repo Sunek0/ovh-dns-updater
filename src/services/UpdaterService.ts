@@ -41,7 +41,7 @@ export class UpdaterService {
     this.initializeAccounts(config.accounts);
   }
 
-  private initializeAccounts(accountsCfg: AccountConfig[]) {
+  private initializeAccounts(accountsCfg: AccountConfig[]): void {
     for (const accCfg of accountsCfg) {
       if (accCfg.enabled === false) continue;
 
@@ -49,7 +49,13 @@ export class UpdaterService {
         const account = new OvhAccount(accCfg, this.logger);
         this.accounts.set(accCfg.id, account);
       } catch (err) {
-        this.logger.error({ err, accountId: accCfg.id }, 'Failed to initialize account');
+        // Keep the public message free of raw error text, which may contain
+        // credentials in future OVH client versions. The caller logs the
+        // cause with full diagnostic context.
+        throw new Error(
+          `Failed to initialize account ${accCfg.id}`,
+          { cause: err },
+        );
       }
     }
   }

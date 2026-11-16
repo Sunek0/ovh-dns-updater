@@ -459,6 +459,16 @@ export class StateStore {
   recordDomainError(input: DomainErrorInput): void {
     const at = this.resolveDate(input.at);
     this.ensureDomain(input.accountId, input.domain);
+
+    // A failed refresh means the changes are stored in OVH but not published
+    // yet, so the records must not keep reporting ok/updated.
+    for (const record of this.records.values()) {
+      if (record.accountId !== input.accountId || record.domain !== input.domain) continue;
+      record.status = 'error';
+      record.lastCheckedAt = at;
+      record.lastError = input.error;
+    }
+
     this.errors += 1;
     const event = this.pushEvent({
       timestamp: at,

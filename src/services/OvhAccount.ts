@@ -10,6 +10,11 @@ import {
 } from '../types.js';
 import { normalizeSubdomain } from '../utils/subdomains.js';
 
+interface OvhRecordDetail {
+  target: string;
+  subDomain: string;
+}
+
 export class OvhAccount {
   private client: OvhClient;
   private config: AccountConfig;
@@ -52,7 +57,6 @@ export class OvhAccount {
         refresh: 'not-needed',
         subdomains: [],
       };
-      let domainUpdated = false;
 
       this.logger.debug({ domain: domainName }, 'Processing domain');
 
@@ -65,12 +69,6 @@ export class OvhAccount {
         try {
           const result = await this.updateRecord(domainName, sub, publicIp);
           domainResult.subdomains.push(result);
-          if (
-            result.status === 'updated' ||
-            result.records?.some(record => record.status === 'updated')
-          ) {
-            domainUpdated = true;
-          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           this.logger.error({ domain: domainName, sub, err }, 'Failed to update subdomain');
@@ -83,7 +81,13 @@ export class OvhAccount {
         }
       }
 
-      if (domainUpdated) {
+      // OVH applies record changes only after a zone refresh. Refresh every
+      // domain with managed records, even when all targets already match: an
+      // earlier PUT may have succeeded while its refresh failed (or the
+      // process crashed before refreshing), in which case the records look
+      // unchanged now but the published zone is still stale. Refresh is
+      // idempotent, so retrying it unconditionally closes that gap.
+      if (normalizedSubdomains.length > 0) {
         try {
           await this.request('POST', `/domain/zone/${domainName}/refresh`);
           domainResult.refresh = 'ok';
@@ -108,10 +112,13 @@ export class OvhAccount {
     sub: string,
     targetIp: string,
   ): Promise<SubdomainSyncResult> {
-    // 1. Find all A record IDs for the subdomain
+    // 1. Find all A record IDs for the subdomain. The OVH `subDomain` filter
+    // is optional: omitting it lists every A record in the zone. Pass it even
+    // for the root record (empty string), otherwise an `@` update would
+    // rewrite unrelated names such as www or mail.
     const records = await this.request<number[]>('GET', `/domain/zone/${domain}/record`, {
       fieldType: 'A',
-      subDomain: sub || undefined,
+      subDomain: sub,
     });
 
     if (!records || records.length === 0) {
@@ -119,55 +126,100 @@ export class OvhAccount {
       return { domain, subdomain: sub, status: 'not-found' };
     }
 
-    const strategy = this.config.recordStrategy ?? 'all';
-
-    if (strategy === 'fail' && records.length !== 1) {
-      const error = `Expected exactly one A record, found ${records.length}`;
-      this.logger.error({ domain, sub, count: records.length }, error);
-      return { domain, subdomain: sub, status: 'failed', error, records: [] };
-    }
-
-    if (strategy === 'single' && records.length > 1) {
-      this.logger.warn(
-        { domain, sub, count: records.length },
-        'Multiple A records found, updating only the first',
-      );
-    }
-
-    const selectedRecords = strategy === 'single' ? records.slice(0, 1) : records;
+    // 2. Read the record details before applying the strategy. This verifies
+    // the subDomain returned by OVH and never updates a record that belongs to
+    // a different name, even if the API filter is ignored or interpreted
+    // loosely.
+    const matched: Array<{ recordId: number; target: string }> = [];
     const recordResults: RecordSyncResult[] = [];
 
-    for (const recordId of selectedRecords) {
+    for (const recordId of records) {
       try {
-        // 2. Get current value from OVH to verify if update is needed
-        const recordData = await this.request<{ target: string }>(
+        const recordData = await this.request<OvhRecordDetail>(
           'GET',
           `/domain/zone/${domain}/record/${recordId}`,
         );
 
-        if (recordData.target === targetIp) {
-          this.logger.debug({ domain, sub, recordId, ip: targetIp }, 'IP already matches in OVH, skipping update');
-          recordResults.push({
-            recordId,
-            previousTarget: recordData.target,
-            status: 'unchanged',
-          });
+        // DNS names are case-insensitive, while the OVH `subDomain` filter is
+        // case-insensitive too. Compare normalized values so an uppercase
+        // configuration does not skip its own record.
+        if (recordData.subDomain.toLowerCase() !== sub.toLowerCase()) {
+          this.logger.warn(
+            { domain, sub, recordId, recordSubDomain: recordData.subDomain },
+            'Ignoring A record returned for a different subdomain',
+          );
           continue;
         }
 
-        // 3. Perform the update since it is different
-        this.logger.info(
-          { domain, sub, recordId, oldIp: recordData.target, newIp: targetIp },
-          'IP desynchronized in OVH, updating record',
-        );
+        matched.push({ recordId, target: recordData.target });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error({ domain, sub, recordId, err }, 'Failed to read record');
+        recordResults.push({ recordId, status: 'failed', error: message });
+      }
+    }
+
+    if (matched.length === 0) {
+      if (recordResults.length > 0) {
+        return {
+          domain,
+          subdomain: sub,
+          status: 'failed',
+          error: `Could not read ${recordResults.length} A record(s)`,
+          records: recordResults,
+        };
+      }
+
+      this.logger.warn({ domain, sub }, 'Record not found in OVH, skipping (creation not supported yet)');
+      return { domain, subdomain: sub, status: 'not-found' };
+    }
+
+    const strategy = this.config.recordStrategy ?? 'all';
+
+    if (strategy === 'fail' && (matched.length !== 1 || recordResults.length > 0)) {
+      const error = recordResults.length > 0
+        ? `Could not read ${recordResults.length} A record(s); expected exactly one`
+        : `Expected exactly one A record, found ${matched.length}`;
+      this.logger.error(
+        { domain, sub, count: matched.length, unreadable: recordResults.length },
+        error,
+      );
+      return { domain, subdomain: sub, status: 'failed', error, records: recordResults };
+    }
+
+    if (strategy === 'single' && matched.length > 1) {
+      this.logger.warn(
+        { domain, sub, count: matched.length },
+        'Multiple A records found, updating only the first',
+      );
+    }
+
+    const selectedRecords = strategy === 'single' ? matched.slice(0, 1) : matched;
+
+    // 3. Update each selected record only when its target differs.
+    for (const { recordId, target } of selectedRecords) {
+      if (target === targetIp) {
+        this.logger.debug({ domain, sub, recordId, ip: targetIp }, 'IP already matches in OVH, skipping update');
+        recordResults.push({
+          recordId,
+          previousTarget: target,
+          status: 'unchanged',
+        });
+        continue;
+      }
+
+      this.logger.info(
+        { domain, sub, recordId, oldIp: target, newIp: targetIp },
+        'IP desynchronized in OVH, updating record',
+      );
+      try {
         await this.request('PUT', `/domain/zone/${domain}/record/${recordId}`, {
           target: targetIp,
-          subDomain: sub || undefined,
         });
 
         recordResults.push({
           recordId,
-          previousTarget: recordData.target,
+          previousTarget: target,
           status: 'updated',
         });
       } catch (err) {

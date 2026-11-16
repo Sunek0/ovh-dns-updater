@@ -15,6 +15,8 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 - **Smart Sync**:
   - **Background Scheduler**: Periodically checks and updates records (default: every 10 mins).
   - **On-Demand API**: Trigger updates via REST API.
+  - **Refresh Retry**: Every managed domain is refreshed on each sync, so an earlier failed
+    `POST /refresh` is retried even when the record targets already match in OVH.
 - **Web Status UI**: Optional, dependency-free interface with live in-memory status, per-record values, IP provider health and a filterable event timeline.
 - **Feature Toggles**: Enable/Disable the scheduler, the API or the web UI independently via configuration.
 - **Modern Stack**: Node.js 24+, Fastify 5, TypeScript, Pino logging, and Vitest.
@@ -40,6 +42,13 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
    ```bash
    pnpm build
    ```
+3. Create `config/local.yml` with a strong `security.apiKey` (at least 32 characters,
+   non-placeholder, non-repetitive) and your accounts. The shipped `change-me`
+   placeholder is rejected when the API or UI is enabled, which is the default.
+   Generate a key with:
+   ```bash
+   openssl rand -hex 32
+   ```
 
 ## Configuration
 
@@ -47,8 +56,12 @@ The project uses `node-config`. Configuration is merged from `config/default.yam
 environment variables, and the instance file `config/local.yml` (or `config/local.yaml`).
 
 The merged configuration is validated at startup. Invalid values, duplicate account IDs,
-duplicate tokens or malformed provider URLs abort the process with a clear error that
-does not include secret values.
+duplicate tokens, malformed provider URLs or unsupported OVH endpoints abort the process
+with a clear error that does not include secret values. A failure to initialize an
+enabled account also aborts startup instead of leaving it silently disabled. When
+`ondemand.enabled` or `ui.enabled` is true, placeholder/short `security.apiKey` values
+are rejected; when `ondemand.enabled` is true, the same applies to enabled account
+`token` values.
 
 ### Settings Overview
 
@@ -57,7 +70,7 @@ does not include secret values.
 | `server.port` | HTTP Port | `3000` |
 | `server.logLevel` | Logging level (pino) | `info` |
 | `server.trustProxy` | Trust `X-Forwarded-*` headers (only behind a trusted proxy) | `false` |
-| `security.apiKey` | Master token for API access | `change-me` |
+| `security.apiKey` | Master token for API/UI access (min 32 chars, non-placeholder when enabled) | `change-me` |
 | `security.allowLegacyGlobalAccountTokens` | Allow account tokens to trigger global syncs (legacy) | `false` |
 | `scheduler.enabled` | Enable background checks | `true` |
 | `scheduler.interval` | Interval between checks (seconds) | `600` (10m) |
@@ -66,14 +79,18 @@ does not include secret values.
 | `ui.historySize` | Events kept in the in-memory circular buffer | `500` |
 | `ui.refreshSeconds` | Fallback polling interval used when SSE is unavailable | `10` |
 
-> **Security:** change `security.apiKey` before exposing the service. The default
-> value is only a placeholder and must not be used in production.
+> **Security:** change `security.apiKey` before exposing the service. When the API or
+> UI is enabled, startup fails if the key is a known placeholder (`change-me`, the
+> example below, etc.), shorter than 32 characters, or obviously repetitive. Generate
+> one with `openssl rand -hex 32`. Enabled account `token` values must be at least 32
+> characters and non-placeholder when `ondemand.enabled` is true.
 
 ### Account Configuration
 
 Each account in the `accounts` array can have:
 - `id`: Unique identifier for logging/API.
-- `token`: (Optional) A dedicated token for legacy GET access. It is scoped to this account.
+- `token`: (Optional) A dedicated token for legacy GET access, scoped to this account.
+  Must be at least 32 characters and non-placeholder when `ondemand.enabled` is true.
 - `credentials`: OVH endpoint and keys. `timeout` is optional and defaults to 30 seconds.
 - `domains`: List of domains and subdomains (use `@` for root and `*` for a wildcard).
 - `recordStrategy`: How to handle multiple A records for the same subdomain:
@@ -84,7 +101,7 @@ Each account in the `accounts` array can have:
 ```yaml
 accounts:
   - id: 'my-home-server'
-    token: 'my-secret-path-token'
+    token: 'CAMBIAR_ESTE_TOKEN' # deliberately invalid: use 32+ chars when ondemand is enabled
     enabled: true
     recordStrategy: 'all'
     credentials:
@@ -115,6 +132,8 @@ server:
   trustProxy: false
 
 security:
+  # El servicio rechaza este placeholder; genera una clave real:
+  #   openssl rand -hex 32
   apiKey: 'CAMBIAR_POR_UNA_CLAVE_LARGA_Y_ALEATORIA'
   allowLegacyGlobalAccountTokens: false
 
