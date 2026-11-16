@@ -26,5 +26,5 @@ USER node
 EXPOSE 3000
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD node -e "const config=require('config');fetch('http://127.0.0.1:'+config.get('server.port')+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const config=require('config');const raw=config.get('server.host');const host=raw==='0.0.0.0'||raw==='::'?'127.0.0.1':raw;const target=host.includes(':')?'['+host+']':host;fetch('http://'+target+':'+config.get('server.port')+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD [ "node", "dist/index.js" ]

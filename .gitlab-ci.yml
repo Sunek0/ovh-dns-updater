@@ -34,6 +34,12 @@ test:
 
 build_image:
   stage: build
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ''
   before_script:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
   script:
@@ -53,6 +59,12 @@ build_image:
 
 push_image:
   stage: push
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ''
   before_script:
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
   script:

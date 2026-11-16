@@ -8,6 +8,7 @@ coverage
 README.md
 test
 config/local.*
+config/production.*
 logs
 *.log
 .env

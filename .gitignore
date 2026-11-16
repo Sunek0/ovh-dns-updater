@@ -7,8 +7,8 @@ dist/
 *.tsbuildinfo
 
 # Ignore local config
-config/local.yml
-config/local.yaml
+config/local.*
+config/production.*
 
 # Ignore logs
 logs/
@@ -19,9 +19,8 @@ npm-debug.log*
 uploads/
 
 # Ignore environment files
-.env
-.env.local
-.env.*.local
+.env*
+!.env.example
 
 # Ignore IDE
 .vscode/
