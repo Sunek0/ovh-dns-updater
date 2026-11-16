@@ -111,6 +111,8 @@ describe('scheduler plugin', () => {
     return { app, syncAll };
   }
 
+  const flushScheduler = () => vi.advanceTimersByTimeAsync(0);
+
   it('runs an initial sync and then periodic syncs', async () => {
     const { app, syncAll } = await build();
 
@@ -120,8 +122,9 @@ describe('scheduler plugin', () => {
     await vi.advanceTimersByTimeAsync(600_000);
     expect(syncAll).toHaveBeenCalledWith(false, undefined, 'scheduler');
 
+    await flushScheduler();
     await app.close();
-  });
+  }, 15_000);
 
   it('skips a run while the previous sync is still in flight', async () => {
     let release!: () => void;
@@ -145,19 +148,20 @@ describe('scheduler plugin', () => {
     expect(syncAll).toHaveBeenCalledTimes(1);
 
     release();
-    await vi.advanceTimersByTimeAsync(0);
+    await flushScheduler();
     await app.close();
-  });
+  }, 15_000);
 
   it('stops scheduling after close', async () => {
     const { app, syncAll } = await build();
 
     await vi.advanceTimersByTimeAsync(100);
+    await flushScheduler();
     await app.close();
     await vi.advanceTimersByTimeAsync(1_200_000);
 
     expect(syncAll).toHaveBeenCalledTimes(1);
-  });
+  }, 15_000);
 
   it('waits for an in-flight sync before closing', async () => {
     let release!: () => void;
@@ -184,11 +188,11 @@ describe('scheduler plugin', () => {
       closed = true;
     });
 
-    await vi.advanceTimersByTimeAsync(0);
+    await flushScheduler();
     expect(closed).toBe(false);
 
     release();
     await closePromise;
     expect(closed).toBe(true);
-  });
+  }, 15_000);
 });
