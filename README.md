@@ -15,6 +15,8 @@ A modern, dynamic DNS updater for OVH accounts. It monitors your public IP addre
 - **Smart Sync**:
   - **Background Scheduler**: Periodically checks and updates records (default: every 10 mins).
   - **On-Demand API**: Trigger updates via REST API.
+  - **Refresh Retry**: Every managed domain is refreshed on each sync, so an earlier failed
+    `POST /refresh` is retried even when the record targets already match in OVH.
 - **Web Status UI**: Optional, dependency-free interface with live in-memory status, per-record values, IP provider health and a filterable event timeline.
 - **Feature Toggles**: Enable/Disable the scheduler, the API or the web UI independently via configuration.
 - **Modern Stack**: Node.js 24+, Fastify 5, TypeScript, Pino logging, and Vitest.

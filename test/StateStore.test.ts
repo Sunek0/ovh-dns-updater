@@ -428,6 +428,11 @@ describe('StateStore', () => {
     });
 
     expect(store.getSnapshot().counters.errors).toBe(1);
+    expect(store.getSnapshot().accounts[0].domains[0].records[0]).toMatchObject({
+      status: 'error',
+      lastError: 'Zone refresh failed',
+      lastCheckedAt: T0.toISOString(),
+    });
     expect(store.getEvents({ domain: 'example.com' }).events[0]).toEqual(
       expect.objectContaining({
         action: 'error',
