@@ -1,6 +1,7 @@
 import { FastifyBaseLogger } from 'fastify';
 import type { IpDetectionReport, ProviderFailure } from '../types.js';
-import { isValidIPv4 } from '../utils/ip.js';
+import { isPublicIPv4 } from '../utils/ip.js';
+import { sanitizeUrl } from '../utils/redaction.js';
 
 export class IpService {
   private providers: string[];
@@ -52,7 +53,10 @@ export class IpService {
       this.onDetection(report);
     } catch (err) {
       // Observability must never break IP detection or the DNS update path.
-      this.logger.warn({ err }, 'IP detection observer failed');
+      this.logger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        'IP detection observer failed',
+      );
     }
   }
 
@@ -67,8 +71,10 @@ export class IpService {
     const failures: ProviderFailure[] = [];
 
     for (const provider of shuffled) {
+      const safeProvider = sanitizeUrl(provider);
+
       try {
-        this.logger.debug({ provider }, 'Fetching IP from provider');
+        this.logger.debug({ provider: safeProvider }, 'Fetching IP from provider');
         const response = await fetch(provider, { signal: AbortSignal.timeout(5000) });
 
         if (!response.ok) {
@@ -77,22 +83,26 @@ export class IpService {
 
         const ip = (await response.text()).trim();
 
-        if (!isValidIPv4(ip)) {
-          throw new Error(`Invalid IP format received: ${ip}`);
+        if (!isPublicIPv4(ip)) {
+          throw new Error(`Invalid public IPv4 format received: ${ip}`);
         }
 
-        this.logger.info({ provider, ip }, 'Public IP detected');
+        this.logger.info({ provider: safeProvider, ip }, 'Public IP detected');
         this.notifyDetection({
           ip,
-          provider,
+          provider: safeProvider,
           failures,
           detectedAt: new Date(),
         });
         return ip;
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        failures.push({ provider, error: message });
-        this.logger.warn({ provider, err }, 'Failed to fetch IP from provider, trying next...');
+        const rawMessage = err instanceof Error ? err.message : String(err);
+        const message = rawMessage.split(provider).join(safeProvider);
+        failures.push({ provider: safeProvider, error: message });
+        this.logger.warn(
+          { provider: safeProvider, error: message },
+          'Failed to fetch IP from provider, trying next...',
+        );
       }
     }
 

@@ -17,7 +17,7 @@ interface SseReader {
 
 const config: any = {
   security: {
-    apiKey: 'master-token',
+    apiKey: '0123456789abcdef0123456789abcdef',
     allowLegacyGlobalAccountTokens: false,
   },
   accounts: [{
@@ -154,7 +154,7 @@ describe('SSE stream', () => {
     await app.close();
   });
 
-  async function openStream(query = '', apiKey = 'master-token') {
+  async function openStream(query = '', apiKey = '0123456789abcdef0123456789abcdef') {
     const controller = new AbortController();
     controllers.push(controller);
 
@@ -186,7 +186,7 @@ describe('SSE stream', () => {
 
   it('validates stream filters before opening the connection', async () => {
     const response = await fetch(`${baseUrl}/api/stream?type=nope`, {
-      headers: { Authorization: 'Bearer master-token' },
+      headers: { Authorization: 'Bearer 0123456789abcdef0123456789abcdef' },
     });
 
     expect(response.status).toBe(400);
@@ -321,5 +321,17 @@ describe('SSE stream', () => {
       action: 'error',
       fqdn: 'www.example.com',
     }));
+  });
+
+  it('closes open streams during shutdown instead of hanging', async () => {
+    const { reader } = await openStream();
+    await reader.nextFrame(); // bootstrap
+
+    const result = await Promise.race([
+      app.close().then(() => 'closed'),
+      new Promise(resolve => setTimeout(() => resolve('timeout'), 2000)),
+    ]);
+
+    expect(result).toBe('closed');
   });
 });

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import fastify from 'fastify';
 import request from 'supertest';
+import { buildServer } from '../src/app.js';
 import statusRoutes from '../src/routes/status.js';
 import uiRoutes from '../src/routes/ui.js';
 import { StateStore } from '../src/services/StateStore.js';
@@ -9,14 +10,14 @@ const NOW = new Date('2026-01-01T00:00:00.000Z');
 
 const config: any = {
   security: {
-    apiKey: 'master-token',
+    apiKey: '0123456789abcdef0123456789abcdef',
     allowLegacyGlobalAccountTokens: false,
   },
   accounts: [
     {
       id: 'acc1',
       enabled: true,
-      token: 'account-token',
+      token: 'fedcba9876543210fedcba9876543210',
       credentials: {
         endpoint: 'ovh-eu',
         appKey: 'APP_KEY_SHOULD_NOT_LEAK',
@@ -109,14 +110,14 @@ describe('Status API routes', () => {
 
     const accountToken = await request(app.server)
       .get('/api/status')
-      .set('Authorization', 'Bearer account-token');
+      .set('Authorization', 'Bearer fedcba9876543210fedcba9876543210');
     expect(accountToken.status).toBe(401);
   });
 
   it('returns the full snapshot with the master API key', async () => {
     const response = await request(app.server)
       .get('/api/status')
-      .set('Authorization', 'Bearer master-token');
+      .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
 
     expect(response.status).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
@@ -140,10 +141,10 @@ describe('Status API routes', () => {
   it('never exposes credentials, account tokens or the API key', async () => {
     const response = await request(app.server)
       .get('/api/status')
-      .set('Authorization', 'Bearer master-token');
+      .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
     const eventsResponse = await request(app.server)
       .get('/api/events')
-      .set('Authorization', 'Bearer master-token');
+      .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
 
     const body = JSON.stringify({
       status: response.body,
@@ -153,8 +154,8 @@ describe('Status API routes', () => {
       'APP_KEY_SHOULD_NOT_LEAK',
       'APP_SECRET_SHOULD_NOT_LEAK',
       'CONSUMER_KEY_SHOULD_NOT_LEAK',
-      'account-token',
-      'master-token',
+      'fedcba9876543210fedcba9876543210',
+      '0123456789abcdef0123456789abcdef',
     ]) {
       expect(body).not.toContain(secret);
     }
@@ -163,7 +164,7 @@ describe('Status API routes', () => {
   it('returns filtered events and validates query parameters', async () => {
     const response = await request(app.server)
       .get('/api/events?limit=1&account=acc1&domain=example.com&type=updated')
-      .set('Authorization', 'Bearer master-token');
+      .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
 
     expect(response.status).toBe(200);
     expect(response.headers['cache-control']).toBe('no-store');
@@ -177,12 +178,12 @@ describe('Status API routes', () => {
 
     const invalidLimit = await request(app.server)
       .get('/api/events?limit=0')
-      .set('Authorization', 'Bearer master-token');
+      .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
     expect(invalidLimit.status).toBe(400);
 
     const invalidType = await request(app.server)
       .get('/api/events?type=whatever')
-      .set('Authorization', 'Bearer master-token');
+      .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
     expect(invalidType.status).toBe(400);
   });
 
@@ -197,6 +198,10 @@ describe('Status API routes', () => {
     expect(page.status).toBe(200);
     expect(page.headers['content-type']).toContain('text/html');
     expect(page.headers['x-content-type-options']).toBe('nosniff');
+    expect(page.headers['x-frame-options']).toBe('DENY');
+    expect(page.headers['referrer-policy']).toBe('no-referrer');
+    expect(page.headers['content-security-policy']).toContain("default-src 'self'");
+    expect(page.headers['content-security-policy']).toContain("frame-ancestors 'none'");
     expect(page.text).toContain('DNS Updater');
     expect(page.text).toContain('src="/app.js"');
     expect(page.text).not.toMatch(/src="https?:\/\//);
@@ -212,5 +217,60 @@ describe('Status API routes', () => {
 
     const api = await request(app.server).get('/api/status');
     expect(api.status).toBe(401);
+  });
+});
+
+describe('buildServer', () => {
+  it('wires services, routes, health and authentication', async () => {
+    const appConfig: any = {
+      server: {
+        port: 3000,
+        host: '127.0.0.1',
+        logLevel: 'info',
+        trustProxy: false,
+      },
+      security: {
+        apiKey: '0123456789abcdef0123456789abcdef',
+        allowLegacyGlobalAccountTokens: false,
+        allowInsecureIpProviders: false,
+      },
+      ondemand: { enabled: true },
+      scheduler: { enabled: false, interval: 600 },
+      ui: { enabled: true, historySize: 10, refreshSeconds: 10 },
+      ipProviders: ['https://ip.test'],
+      accounts: [{
+        id: 'acc1',
+        provider: 'ovh',
+        credentials: {
+          endpoint: 'ovh-eu',
+          appKey: 'APP_KEY_SHOULD_NOT_LEAK',
+          appSecret: 'APP_SECRET_SHOULD_NOT_LEAK',
+          consumerKey: 'CONSUMER_KEY_SHOULD_NOT_LEAK',
+        },
+        domains: [{ name: 'example.com', subdomains: ['@'] }],
+      }],
+    };
+
+    const app = await buildServer(appConfig, { logger: false });
+
+    const health = await app.inject({ method: 'GET', url: '/health' });
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({ status: 'ok' });
+
+    const unauthorized = await app.inject({ method: 'GET', url: '/api/status' });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const authorized = await app.inject({
+      method: 'GET',
+      url: '/api/status',
+      headers: { authorization: 'Bearer 0123456789abcdef0123456789abcdef' },
+    });
+    expect(authorized.statusCode).toBe(200);
+    expect(authorized.json().accounts[0].id).toBe('acc1');
+
+    expect(app.stateStore).toBeInstanceOf(StateStore);
+    expect(app.updaterService.hasAccount('acc1')).toBe(true);
+
+    await app.close();
   });
 });

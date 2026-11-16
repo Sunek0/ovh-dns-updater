@@ -1,12 +1,15 @@
 import { FastifyBaseLogger } from 'fastify';
-import { AccountConfig, AccountSyncResult, AppConfig } from '../types.js';
-import { summarizeAccountResult } from '../utils/results.js';
-import { IpService } from './IpService.js';
 import {
+  AccountConfig,
+  AccountSyncResult,
+  AppConfig,
   CheckStatus,
-  StateStore,
   SyncTrigger,
-} from './StateStore.js';
+} from '../types.js';
+import { configuredSecrets, redactAccountResult, redactSecrets } from '../utils/redaction.js';
+import { summarizeAccountResult, toPublicAccountResult } from '../utils/results.js';
+import { IpService } from './IpService.js';
+import { StateStore } from './StateStore.js';
 import { OvhAccount } from './OvhAccount.js';
 
 function overallStatus(details: Record<string, AccountSyncResult>): CheckStatus {
@@ -25,7 +28,8 @@ export class UpdaterService {
   private accounts: Map<string, OvhAccount>; // id -> account
   private logger: FastifyBaseLogger;
   private stateStore?: StateStore;
-  private lastIp: string | null = null;
+  private readonly secrets: string[];
+  private syncQueue: Promise<void> = Promise.resolve();
 
   constructor(
     config: AppConfig,
@@ -37,11 +41,26 @@ export class UpdaterService {
     this.logger = logger;
     this.stateStore = stateStore;
     this.accounts = new Map();
+    this.secrets = configuredSecrets(config);
 
     this.initializeAccounts(config.accounts);
   }
 
-  private initializeAccounts(accountsCfg: AccountConfig[]) {
+  private redact(value: string): string {
+    return redactSecrets(value, this.secrets);
+  }
+
+  /**
+   * Serializes sync operations so an on-demand request cannot overlap a
+   * scheduled run (or another account sync) against OVH.
+   */
+  private enqueueSync<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.syncQueue.then(task, task);
+    this.syncQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private initializeAccounts(accountsCfg: AccountConfig[]): void {
     for (const accCfg of accountsCfg) {
       if (accCfg.enabled === false) continue;
 
@@ -49,7 +68,13 @@ export class UpdaterService {
         const account = new OvhAccount(accCfg, this.logger);
         this.accounts.set(accCfg.id, account);
       } catch (err) {
-        this.logger.error({ err, accountId: accCfg.id }, 'Failed to initialize account');
+        // Keep the public message free of raw error text, which may contain
+        // credentials in future OVH client versions. The caller logs the
+        // cause with full diagnostic context.
+        throw new Error(
+          `Failed to initialize account ${accCfg.id}`,
+          { cause: err },
+        );
       }
     }
   }
@@ -64,7 +89,11 @@ export class UpdaterService {
     try {
       update(this.stateStore);
     } catch (err) {
-      this.logger.warn({ err }, 'State store update failed');
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(
+        { error: this.redact(message) },
+        'State store update failed',
+      );
     }
   }
 
@@ -74,9 +103,11 @@ export class UpdaterService {
     ip: string,
     trigger: SyncTrigger,
   ): void {
+    const safeResult = redactAccountResult(result, this.secrets);
+
     this.updateState(store => {
       const at = new Date();
-      const subdomains = result.domains.flatMap(domain => domain.subdomains);
+      const subdomains = safeResult.domains.flatMap(domain => domain.subdomains);
 
       for (const subdomainResult of subdomains) {
         store.recordRecordResult({
@@ -90,7 +121,7 @@ export class UpdaterService {
         });
       }
 
-      for (const domainResult of result.domains) {
+      for (const domainResult of safeResult.domains) {
         if (domainResult.refresh !== 'failed') continue;
         store.recordDomainError({
           at,
@@ -101,8 +132,8 @@ export class UpdaterService {
         });
       }
 
-      if (result.error && subdomains.length === 0) {
-        store.recordAccountError({ at, trigger, accountId, error: result.error });
+      if (safeResult.error && subdomains.length === 0) {
+        store.recordAccountError({ at, trigger, accountId, error: safeResult.error });
       }
     });
   }
@@ -126,50 +157,70 @@ export class UpdaterService {
     results: Record<string, string>;
     details: Record<string, AccountSyncResult>;
   }> {
-    this.logger.info({ force, providedIp, trigger }, 'Starting global sync');
+    return this.enqueueSync(() => this.performSyncAll(force, providedIp, trigger));
+  }
 
-    // 1. Get IP (use provided or detect)
-    let currentIp: string;
+  private async resolveIp(
+    providedIp: string | undefined,
+    force: boolean,
+    trigger: SyncTrigger,
+  ): Promise<string> {
+    if (providedIp !== undefined) {
+      return providedIp;
+    }
+
     try {
-      currentIp = providedIp || await this.ipService.getPublicIp();
+      return await this.ipService.getPublicIp(force);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = this.redact(err instanceof Error ? err.message : String(err));
       this.updateState(store => {
         store.recordIpCheck({ trigger, error: message });
       });
       throw err;
     }
+  }
+
+  private async performSyncAll(
+    force: boolean,
+    providedIp: string | undefined,
+    trigger: SyncTrigger,
+  ): Promise<{
+    ip: string;
+    results: Record<string, string>;
+    details: Record<string, AccountSyncResult>;
+  }> {
+    this.logger.info({ force, trigger }, 'Starting global sync');
+
+    const currentIp = await this.resolveIp(providedIp, force, trigger);
 
     this.updateState(store => {
       store.recordIpCheck({ trigger, ip: currentIp });
     });
 
-    // 2. Logic for skipping or verifying
-    if (!force && currentIp === this.lastIp) {
-      this.logger.info({ ip: currentIp }, 'IP matches last detected IP. Verifying OVH consistency anyway.');
-    } else if (force) {
-      this.logger.info({ ip: currentIp }, 'Forcing global sync regardless of last IP.');
-    } else {
-      this.logger.info({ oldIp: this.lastIp, newIp: currentIp }, 'IP change detected or initial sync.');
-    }
+    this.logger.info(
+      { ip: currentIp, force, trigger },
+      'Public IP resolved for global sync',
+    );
 
-    this.lastIp = currentIp;
     const results: Record<string, string> = {};
     const details: Record<string, AccountSyncResult> = {};
 
-    // 3. Update all accounts in parallel
-    // Each OvhAccount.updateAccount verifies whether the IP actually differs in OVH before writing.
+    // Update all accounts in parallel. Each OvhAccount verifies whether the
+    // target actually differs in OVH before writing.
     const promises = Array.from(this.accounts.entries()).map(async ([id, account]) => {
       try {
         const result = await account.updateAccount(currentIp);
-        details[id] = result;
-        results[id] = summarizeAccountResult(result);
         this.recordAccountResult(id, result, currentIp, trigger);
-      } catch (err: any) {
-        const message = err instanceof Error ? err.message : String(err);
-        this.logger.error({ accountId: id, err }, 'Account update failed');
-        details[id] = { status: 'failed', domains: [], error: message };
-        results[id] = `Failed: ${message}`;
+        details[id] = toPublicAccountResult(result);
+        results[id] = summarizeAccountResult(result);
+      } catch (err) {
+        const message = this.redact(err instanceof Error ? err.message : String(err));
+        this.logger.error(
+          { accountId: id, error: message },
+          'Account update failed',
+        );
+        details[id] = { status: 'failed', domains: [], error: 'Account sync failed' };
+        results[id] = 'Failed';
         this.recordAccountFailure(id, message, trigger);
       }
     });
@@ -201,21 +252,25 @@ export class UpdaterService {
     ip: string;
     result: AccountSyncResult;
   }> {
+    return this.enqueueSync(
+      () => this.performSyncAccount(accountId, providedIp, trigger),
+    );
+  }
+
+  private async performSyncAccount(
+    accountId: string,
+    providedIp: string | undefined,
+    trigger: SyncTrigger,
+  ): Promise<{
+    ip: string;
+    result: AccountSyncResult;
+  }> {
     const account = this.accounts.get(accountId);
     if (!account) {
       throw new Error(`Account ${accountId} not found`);
     }
 
-    let currentIp: string;
-    try {
-      currentIp = providedIp ?? await this.ipService.getPublicIp();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.updateState(store => {
-        store.recordIpCheck({ trigger, error: message });
-      });
-      throw err;
-    }
+    const currentIp = await this.resolveIp(providedIp, false, trigger);
 
     this.updateState(store => {
       store.recordIpCheck({ trigger, ip: currentIp });
@@ -225,10 +280,14 @@ export class UpdaterService {
     try {
       result = await account.updateAccount(currentIp);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = this.redact(err instanceof Error ? err.message : String(err));
+      this.logger.error(
+        { accountId, error: message },
+        'Account update failed',
+      );
       this.recordAccountFailure(accountId, message, trigger);
       this.updateState(store => {
-        store.recordSyncOutcome({ status: 'error', error: message });
+        store.recordSyncOutcome({ status: 'error', error: 'Account sync failed' });
       });
       throw err;
     }
@@ -239,14 +298,14 @@ export class UpdaterService {
         status: result.status === 'success'
           ? 'ok'
           : result.status === 'failed' ? 'error' : 'partial',
-        error: result.error ?? null,
+        error: result.error ? this.redact(result.error) : null,
       });
     });
 
-    return { ip: currentIp, result };
+    return { ip: currentIp, result: toPublicAccountResult(result) };
   }
 
-  getPublicIp() {
-    return this.ipService.getPublicIp();
+  getPublicIp(force = false) {
+    return this.ipService.getPublicIp(force);
   }
 }

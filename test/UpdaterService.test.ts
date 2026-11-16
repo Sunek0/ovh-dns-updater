@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { UpdaterService } from '../src/services/UpdaterService.js';
-import { OvhAccount } from '../src/services/OvhAccount.js';
+import { summarizeAccountResult, toPublicAccountResult } from '../src/utils/results.js';
 
 // Global mocks for OvhAccount methods
 const mockUpdateAccount = vi.fn();
@@ -75,10 +75,10 @@ describe('UpdaterService', () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
     const result = await service.syncAll();
 
-    expect(result.results['acc1']).toContain('Failed: API Down');
+    expect(result.results['acc1']).toBe('Failed');
     expect(result.results['acc3']).toBe('Success');
     expect(result.details['acc1'].status).toBe('failed');
-    expect(result.details['acc1'].error).toContain('API Down');
+    expect(result.details['acc1'].error).toBe('Account sync failed');
   });
 
   it('should surface partial account results', async () => {
@@ -134,10 +134,10 @@ describe('UpdaterService', () => {
     expect(mockUpdateAccount).toHaveBeenCalledWith('9.9.9.9');
   });
 
-  it('should still verify with OVH if current IP matches last IP', async () => {
+  it('should still verify with OVH when the IP has not changed', async () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
     
-    // First sync sets lastIp to 1.1.1.1
+    // First sync sets the last detected IP
     await service.syncAll();
     expect(mockUpdateAccount).toHaveBeenCalledTimes(2);
     
@@ -146,18 +146,121 @@ describe('UpdaterService', () => {
     // Second sync with same IP
     await service.syncAll();
     
-    // Should still call updateAccount because we must "revisar en OVH"
+    // Should still call updateAccount because we must verify in OVH
     expect(mockUpdateAccount).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-        expect.objectContaining({ ip: '1.1.1.1' }), 
-        'IP matches last detected IP. Verifying OVH consistency anyway.'
-    );
   });
 
   it('should get public ip', async () => {
     const service = new UpdaterService(config, mockIpService, mockLogger);
     const ip = await service.getPublicIp();
     expect(ip).toBe('1.1.1.1');
+  });
+
+  it('should force a fresh IP detection when requested', async () => {
+    const service = new UpdaterService(config, mockIpService, mockLogger);
+
+    await service.syncAll(true);
+    expect(mockIpService.getPublicIp).toHaveBeenLastCalledWith(true);
+
+    await service.syncAll(false);
+    expect(mockIpService.getPublicIp).toHaveBeenLastCalledWith(false);
+  });
+
+  it('should record an IP detection failure and skip account updates', async () => {
+    mockIpService.getPublicIp.mockRejectedValueOnce(new Error('providers down'));
+    const stateStore = { recordIpCheck: vi.fn() };
+    const service = new UpdaterService(config, mockIpService, mockLogger, stateStore as any);
+
+    await expect(service.syncAll()).rejects.toThrow('providers down');
+    expect(stateStore.recordIpCheck).toHaveBeenCalledWith({
+      trigger: 'ondemand',
+      error: 'providers down',
+    });
+    expect(mockUpdateAccount).not.toHaveBeenCalled();
+  });
+
+  it('should record a specific-account sync failure', async () => {
+    mockUpdateAccount.mockRejectedValueOnce(new Error('OVH down'));
+    const stateStore = {
+      recordIpCheck: vi.fn(),
+      recordAccountError: vi.fn(),
+      recordSyncOutcome: vi.fn(),
+    };
+    const service = new UpdaterService(config, mockIpService, mockLogger, stateStore as any);
+
+    await expect(service.syncAccount('acc1')).rejects.toThrow('OVH down');
+    expect(stateStore.recordAccountError).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 'acc1', error: 'OVH down' }),
+    );
+    expect(stateStore.recordSyncOutcome).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Account sync failed',
+    });
+  });
+
+  it('should serialize concurrent global and account syncs', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    mockUpdateAccount
+      .mockImplementationOnce(() => gate.then(() => successResult))
+      .mockResolvedValue(successResult);
+
+    const singleConfig = {
+      accounts: [{ id: 'acc1', enabled: true, domains: [] }],
+    };
+    const service = new UpdaterService(singleConfig as any, mockIpService, mockLogger);
+
+    const first = service.syncAll();
+    const second = service.syncAccount('acc1');
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(mockUpdateAccount).toHaveBeenCalledTimes(1);
+
+    release();
+    await Promise.all([first, second]);
+    expect(mockUpdateAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it('should redact configured secrets from returned and recorded errors', async () => {
+    const secretConfig = {
+      security: { apiKey: 'MASTER_KEY_SHOULD_NOT_LEAK' },
+      accounts: [{
+        id: 'acc1',
+        enabled: true,
+        domains: [],
+        credentials: {
+          endpoint: 'ovh-eu',
+          appKey: 'APP_KEY_SHOULD_NOT_LEAK',
+          appSecret: 'APP_SECRET_SHOULD_NOT_LEAK',
+          consumerKey: 'CONSUMER_KEY_SHOULD_NOT_LEAK',
+        },
+      }],
+    };
+    mockUpdateAccount.mockRejectedValueOnce(
+      new Error('boom APP_SECRET_SHOULD_NOT_LEAK'),
+    );
+    const stateStore = {
+      recordIpCheck: vi.fn(),
+      recordAccountError: vi.fn(),
+      recordSyncOutcome: vi.fn(),
+    };
+    const service = new UpdaterService(
+      secretConfig as any,
+      mockIpService,
+      mockLogger,
+      stateStore as any,
+    );
+
+    const result = await service.syncAll();
+
+    expect(result.results.acc1).toBe('Failed');
+    expect(result.details.acc1.error).toBe('Account sync failed');
+    expect(JSON.stringify(stateStore.recordAccountError.mock.calls))
+      .not.toContain('APP_SECRET_SHOULD_NOT_LEAK');
+    expect(JSON.stringify(mockLogger.error.mock.calls))
+      .not.toContain('APP_SECRET_SHOULD_NOT_LEAK');
   });
 
   it('should instrument scheduler triggers and per-subdomain results', async () => {
@@ -234,7 +337,7 @@ describe('UpdaterService', () => {
     expect(stateStore.recordSyncOutcome).toHaveBeenCalledWith(
       expect.objectContaining({
         status: 'partial',
-        error: 'OVH unavailable',
+        error: 'Account sync failed',
       }),
     );
   });
@@ -302,8 +405,43 @@ describe('UpdaterService', () => {
     expect(result.details['acc1'].status).toBe('success');
     expect(mockUpdateAccount).toHaveBeenCalledTimes(2);
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(Error) }),
+      expect.objectContaining({ error: 'state store exploded' }),
       'State store update failed',
     );
+  });
+});
+
+describe('account result helpers', () => {
+  it('summarizes every account status', () => {
+    expect(summarizeAccountResult({ status: 'success', domains: [] })).toBe('Success');
+    expect(summarizeAccountResult({ status: 'partial', domains: [] })).toBe('Partial');
+    expect(summarizeAccountResult({ status: 'failed', domains: [] })).toBe('Failed');
+  });
+
+  it('strips upstream diagnostics from public results', () => {
+    const result = toPublicAccountResult({
+      status: 'partial',
+      error: 'OVH error with details',
+      domains: [{
+        domain: 'example.com',
+        refresh: 'failed',
+        subdomains: [{
+          domain: 'example.com',
+          subdomain: 'www',
+          status: 'failed',
+          error: 'OVH error with details',
+          records: [{
+            recordId: 1,
+            status: 'failed',
+            error: 'OVH error with details',
+          }],
+        }],
+      }],
+    });
+
+    expect(result.error).toBe('Account sync failed');
+    expect(result.domains[0].subdomains[0].error).toBe('Update failed');
+    expect(result.domains[0].subdomains[0].records?.[0].error).toBe('Update failed');
+    expect(JSON.stringify(result)).not.toContain('with details');
   });
 });

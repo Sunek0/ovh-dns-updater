@@ -31,12 +31,12 @@ describe('API Routes', () => {
         // Mock config for auth logic
         app.decorate('config', {
             security: {
-                apiKey: 'master-token',
+                apiKey: '0123456789abcdef0123456789abcdef',
                 allowLegacyGlobalAccountTokens: false
             },
             accounts: [
-                { id: 'acc1', token: 'legacy-token', enabled: true },
-                { id: 'disabled', token: 'disabled-token', enabled: false }
+                { id: 'acc1', token: 'fedcba9876543210fedcba9876543210', enabled: true },
+                { id: 'disabled', token: 'abcdefghijklmnopqrstuvwxyz012345', enabled: false }
             ]
         });
 
@@ -49,7 +49,7 @@ describe('API Routes', () => {
 
         const res = await request(app.server)
             .post('/api/sync')
-            .set('Authorization', 'Bearer master-token');
+            .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
 
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('1.2.3.4');
@@ -61,7 +61,7 @@ describe('API Routes', () => {
 
         const res = await request(app.server)
             .post('/api/sync')
-            .set('Authorization', 'bearer master-token');
+            .set('Authorization', 'bearer 0123456789abcdef0123456789abcdef');
 
         expect(res.status).toBe(200);
     });
@@ -69,7 +69,7 @@ describe('API Routes', () => {
     it('POST /api/sync should reject a raw token without the Bearer scheme', async () => {
         const res = await request(app.server)
             .post('/api/sync')
-            .set('Authorization', 'master-token');
+            .set('Authorization', '0123456789abcdef0123456789abcdef');
 
         expect(res.status).toBe(401);
         expect(mockSyncAll).not.toHaveBeenCalled();
@@ -78,7 +78,7 @@ describe('API Routes', () => {
     it('POST /api/sync should reject a non-Bearer scheme', async () => {
         const res = await request(app.server)
             .post('/api/sync')
-            .set('Authorization', 'Basic master-token');
+            .set('Authorization', 'Basic 0123456789abcdef0123456789abcdef');
 
         expect(res.status).toBe(401);
         expect(mockSyncAll).not.toHaveBeenCalled();
@@ -87,16 +87,38 @@ describe('API Routes', () => {
     it('POST /api/sync should reject an account token in the header', async () => {
         const res = await request(app.server)
             .post('/api/sync')
-            .set('Authorization', 'Bearer legacy-token');
+            .set('Authorization', 'Bearer fedcba9876543210fedcba9876543210');
 
         expect(res.status).toBe(401);
         expect(mockSyncAll).not.toHaveBeenCalled();
     });
 
+    it('POST /api/sync should return a generic 502 when IP detection fails', async () => {
+        mockSyncAll.mockRejectedValue(new Error('Could not determine public IP'));
+
+        const res = await request(app.server)
+            .post('/api/sync')
+            .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual({ error: 'Sync failed' });
+    });
+
+    it('GET /api/public-ip should return a generic 502 when detection fails', async () => {
+        app.updaterService.getPublicIp = vi.fn().mockRejectedValue(
+            new Error('Could not determine public IP'),
+        );
+
+        const res = await request(app.server).get('/api/public-ip');
+
+        expect(res.status).toBe(502);
+        expect(res.body).toEqual({ error: 'IP detection failed' });
+    });
+
     it('GET /api/:token/checkip should scope an account token to its account', async () => {
         mockSyncAccount.mockResolvedValue(successAccountResult('1.1.1.1'));
 
-        const res = await request(app.server).get('/api/legacy-token/checkip');
+        const res = await request(app.server).get('/api/fedcba9876543210fedcba9876543210/checkip');
 
         expect(res.status).toBe(200);
         expect(mockSyncAccount).toHaveBeenCalledWith('acc1', undefined);
@@ -111,7 +133,7 @@ describe('API Routes', () => {
     it('GET /api/:token/checkip should run a global sync with the master path token', async () => {
         mockSyncAll.mockResolvedValue({ ip: '1.2.3.4', results: { acc1: 'Success' } });
 
-        const res = await request(app.server).get('/api/master-token/checkip');
+        const res = await request(app.server).get('/api/0123456789abcdef0123456789abcdef/checkip');
 
         expect(res.status).toBe(200);
         expect(mockSyncAll).toHaveBeenCalledWith(false);
@@ -126,7 +148,7 @@ describe('API Routes', () => {
     });
 
     it('GET /api/:token/checkip should reject a disabled account token', async () => {
-        const res = await request(app.server).get('/api/disabled-token/checkip');
+        const res = await request(app.server).get('/api/abcdefghijklmnopqrstuvwxyz012345/checkip');
         expect(res.status).toBe(401);
     });
 
@@ -134,7 +156,7 @@ describe('API Routes', () => {
         app.config.security.allowLegacyGlobalAccountTokens = true;
         mockSyncAll.mockResolvedValue({ ip: '1.2.3.4', results: {} });
 
-        const res = await request(app.server).get('/api/legacy-token/checkip');
+        const res = await request(app.server).get('/api/fedcba9876543210fedcba9876543210/checkip');
 
         expect(res.status).toBe(200);
         expect(mockSyncAll).toHaveBeenCalledWith(false);
@@ -144,14 +166,14 @@ describe('API Routes', () => {
     it('GET /api/:token/checkip should return 502 when the account sync fails', async () => {
         mockSyncAccount.mockRejectedValue(new Error('OVH down'));
 
-        const res = await request(app.server).get('/api/legacy-token/checkip');
+        const res = await request(app.server).get('/api/fedcba9876543210fedcba9876543210/checkip');
 
         expect(res.status).toBe(502);
         expect(res.body.error).toBe('Account sync failed');
     });
 
     it('GET /api/:token/setip/:ip should reject an invalid IP', async () => {
-        const res = await request(app.server).get('/api/legacy-token/setip/999.999.999.999');
+        const res = await request(app.server).get('/api/fedcba9876543210fedcba9876543210/setip/999.999.999.999');
         expect(res.status).toBe(400);
         expect(res.body.error).toBe('Invalid IPv4 address');
         expect(mockSyncAll).not.toHaveBeenCalled();
@@ -169,7 +191,7 @@ describe('API Routes', () => {
         mockSyncAccount.mockResolvedValue(successAccountResult('1.1.1.1'));
         const res = await request(app.server)
             .post('/api/accounts/acc1/sync')
-            .set('Authorization', 'Bearer master-token');
+            .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
 
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('1.1.1.1');
@@ -183,7 +205,7 @@ describe('API Routes', () => {
 
         const res = await request(app.server)
             .post('/api/accounts/does-not-exist/sync')
-            .set('Authorization', 'Bearer master-token');
+            .set('Authorization', 'Bearer 0123456789abcdef0123456789abcdef');
 
         expect(res.status).toBe(404);
         expect(res.body.error).toBe('Account not found');
@@ -193,7 +215,7 @@ describe('API Routes', () => {
     it('GET /api/:token/setip/:ip should scope an account token to its account', async () => {
         mockSyncAccount.mockResolvedValue(successAccountResult('9.9.9.9'));
 
-        const res = await request(app.server).get('/api/legacy-token/setip/9.9.9.9');
+        const res = await request(app.server).get('/api/fedcba9876543210fedcba9876543210/setip/9.9.9.9');
 
         expect(res.status).toBe(200);
         expect(res.body).toEqual({
@@ -208,7 +230,7 @@ describe('API Routes', () => {
     it('GET /api/:token/setip/:ip should run a global sync with the master path token', async () => {
         mockSyncAll.mockResolvedValue({ ip: '9.9.9.9', results: { acc1: 'Success' } });
 
-        const res = await request(app.server).get('/api/master-token/setip/9.9.9.9');
+        const res = await request(app.server).get('/api/0123456789abcdef0123456789abcdef/setip/9.9.9.9');
 
         expect(res.status).toBe(200);
         expect(res.body.ip).toBe('9.9.9.9');

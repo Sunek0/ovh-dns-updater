@@ -10,6 +10,117 @@ declare module 'fastify' {
   }
 }
 
+export const LOG_LEVELS = [
+  'fatal',
+  'error',
+  'warn',
+  'info',
+  'debug',
+  'trace',
+  'silent',
+] as const;
+
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
+export const EVENT_ACTIONS = [
+  'updated',
+  'unchanged',
+  'error',
+  'public_ip_changed',
+] as const;
+
+export type EventAction = (typeof EVENT_ACTIONS)[number];
+export type SyncTrigger = 'startup' | 'scheduler' | 'ondemand';
+export type RecordStateStatus = 'pending' | 'ok' | 'updated' | 'error';
+export type CheckStatus = 'ok' | 'partial' | 'error';
+
+export interface StatusEvent {
+  id: number;
+  timestamp: string;
+  trigger: SyncTrigger;
+  accountId: string | null;
+  domain: string | null;
+  subdomain: string | null;
+  fqdn: string | null;
+  action: EventAction;
+  oldValue: string | null;
+  newValue: string | null;
+  message: string | null;
+}
+
+export interface StatusRecord {
+  fqdn: string;
+  type: 'A';
+  subdomain: string;
+  initialValue: string | null;
+  currentValue: string | null;
+  status: RecordStateStatus;
+  lastCheckedAt: string | null;
+  lastChangedAt: string | null;
+  lastError: string | null;
+}
+
+export interface StatusDomain {
+  name: string;
+  records: StatusRecord[];
+}
+
+export interface StatusAccount {
+  id: string;
+  domains: StatusDomain[];
+}
+
+export interface StatusSnapshot {
+  generatedAt: string;
+  startedAt: string;
+  uptimeSeconds: number;
+  initialIp: string | null;
+  currentIp: string | null;
+  lastCheckAt: string | null;
+  lastCheckResult: {
+    status: CheckStatus;
+    ip: string | null;
+    error: string | null;
+  } | null;
+  nextCheckAt: string | null;
+  scheduler: {
+    enabled: boolean;
+    intervalSeconds: number;
+  };
+  ondemand: {
+    enabled: boolean;
+  };
+  ipProvider: {
+    provider: string | null;
+    lastDetectionAt: string | null;
+    failures: ProviderFailure[];
+  };
+  counters: {
+    checks: number;
+    updates: number;
+    errors: number;
+  };
+  ui: {
+    refreshSeconds: number;
+    historySize: number;
+  };
+  accounts: StatusAccount[];
+}
+
+export interface EventFilter {
+  limit?: number;
+  account?: string;
+  domain?: string;
+  type?: EventAction;
+}
+
+export interface EventsResult {
+  events: StatusEvent[];
+  total: number;
+}
+
+export type StateChangeListener = (event?: StatusEvent) => void;
+
 export interface SubdomainConfig {
   [domain: string]: string;
 }
@@ -99,12 +210,13 @@ export interface AppConfig {
   server: {
     port: number;
     host: string;
-    logLevel: string;
+    logLevel: LogLevel;
     trustProxy?: boolean;
   };
   security: {
     apiKey: string;
     allowLegacyGlobalAccountTokens?: boolean;
+    allowInsecureIpProviders?: boolean;
   };
   ondemand: {
     enabled: boolean;

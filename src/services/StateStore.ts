@@ -1,109 +1,21 @@
 import type {
+  CheckStatus,
   DomainConfig,
+  EventAction,
+  EventFilter,
+  EventsResult,
   IpDetectionReport,
   ProviderFailure,
+  RecordStateStatus,
+  StateChangeListener,
+  StatusEvent,
+  StatusRecord,
+  StatusSnapshot,
   SubdomainSyncResult,
+  SyncTrigger,
 } from '../types.js';
+import { matchesEventFilter } from '../utils/events.js';
 import { normalizeSubdomain, qualifyDomain } from '../utils/subdomains.js';
-
-export const EVENT_ACTIONS = [
-  'updated',
-  'unchanged',
-  'error',
-  'public_ip_changed',
-] as const;
-
-export type EventAction = (typeof EVENT_ACTIONS)[number];
-export type SyncTrigger = 'startup' | 'scheduler' | 'ondemand';
-export type RecordStateStatus = 'pending' | 'ok' | 'updated' | 'error';
-export type CheckStatus = 'ok' | 'partial' | 'error';
-
-export interface StatusEvent {
-  id: number;
-  timestamp: string;
-  trigger: SyncTrigger;
-  accountId: string | null;
-  domain: string | null;
-  subdomain: string | null;
-  fqdn: string | null;
-  action: EventAction;
-  oldValue: string | null;
-  newValue: string | null;
-  message: string | null;
-}
-
-export interface StatusRecord {
-  fqdn: string;
-  type: 'A';
-  subdomain: string;
-  initialValue: string | null;
-  currentValue: string | null;
-  status: RecordStateStatus;
-  lastCheckedAt: string | null;
-  lastChangedAt: string | null;
-  lastError: string | null;
-}
-
-export interface StatusDomain {
-  name: string;
-  records: StatusRecord[];
-}
-
-export interface StatusAccount {
-  id: string;
-  domains: StatusDomain[];
-}
-
-export interface StatusSnapshot {
-  generatedAt: string;
-  startedAt: string;
-  uptimeSeconds: number;
-  initialIp: string | null;
-  currentIp: string | null;
-  lastCheckAt: string | null;
-  lastCheckResult: {
-    status: CheckStatus;
-    ip: string | null;
-    error: string | null;
-  } | null;
-  nextCheckAt: string | null;
-  scheduler: {
-    enabled: boolean;
-    intervalSeconds: number;
-  };
-  ondemand: {
-    enabled: boolean;
-  };
-  ipProvider: {
-    provider: string | null;
-    lastDetectionAt: string | null;
-    failures: ProviderFailure[];
-  };
-  counters: {
-    checks: number;
-    updates: number;
-    errors: number;
-  };
-  ui: {
-    refreshSeconds: number;
-    historySize: number;
-  };
-  accounts: StatusAccount[];
-}
-
-export interface EventFilter {
-  limit?: number;
-  account?: string;
-  domain?: string;
-  type?: EventAction;
-}
-
-export interface EventsResult {
-  events: StatusEvent[];
-  total: number;
-}
-
-export type StateChangeListener = (event?: StatusEvent) => void;
 
 export interface StateStoreOptions {
   startedAt?: Date;
@@ -276,6 +188,10 @@ export class StateStore {
         }
       }
     }
+  }
+
+  get eventCapacity(): number {
+    return this.historySize;
   }
 
   /**
@@ -459,6 +375,16 @@ export class StateStore {
   recordDomainError(input: DomainErrorInput): void {
     const at = this.resolveDate(input.at);
     this.ensureDomain(input.accountId, input.domain);
+
+    // A failed refresh means the changes are stored in OVH but not published
+    // yet, so the records must not keep reporting ok/updated.
+    for (const record of this.records.values()) {
+      if (record.accountId !== input.accountId || record.domain !== input.domain) continue;
+      record.status = 'error';
+      record.lastCheckedAt = at;
+      record.lastError = input.error;
+    }
+
     this.errors += 1;
     const event = this.pushEvent({
       timestamp: at,
@@ -538,12 +464,7 @@ export class StateStore {
       ? Math.max(1, Math.min(Math.trunc(requestedLimit), this.historySize))
       : DEFAULT_EVENT_LIMIT;
 
-    const filtered = this.events.filter(event => {
-      if (filter.account && event.accountId !== filter.account) return false;
-      if (filter.domain && event.domain !== filter.domain) return false;
-      if (filter.type && event.action !== filter.type) return false;
-      return true;
-    });
+    const filtered = this.events.filter(event => matchesEventFilter(event, filter));
 
     return {
       events: filtered.slice(-limit).reverse().map(event => ({ ...event })),

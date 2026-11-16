@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { IpService } from '../src/services/IpService.js';
+import { isPublicIPv4 } from '../src/utils/ip.js';
 import { FastifyBaseLogger } from 'fastify';
 
 const mockLogger = {
@@ -91,6 +92,57 @@ describe('IpService', () => {
     const service = new IpService(providers, mockLogger);
 
     await expect(service.getPublicIp()).rejects.toThrow('Could not determine public IP');
+  });
+
+  it('should reject private and loopback addresses returned by a provider', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: true,
+      text: async () => '192.168.1.10',
+    });
+
+    const service = new IpService(providers, mockLogger);
+
+    await expect(service.getPublicIp()).rejects.toThrow('Could not determine public IP');
+  });
+
+  it('should fail over on non-2xx provider responses', async () => {
+    (global.fetch as any).mockResolvedValue({
+      ok: false,
+      status: 503,
+    });
+
+    const service = new IpService(['https://ip1.com'], mockLogger);
+
+    await expect(service.getPublicIp()).rejects.toThrow('Could not determine public IP');
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'Status 503' }),
+      'Failed to fetch IP from provider, trying next...',
+    );
+  });
+
+  it('should redact provider credentials from logs and failure reports', async () => {
+    const secretProvider = 'https://ip1.com/ip?token=SUPERSECRET';
+    const reports: any[] = [];
+
+    (global.fetch as any).mockRejectedValue(
+      new Error(`failed to fetch ${secretProvider}`),
+    );
+
+    const service = new IpService(
+      [secretProvider],
+      mockLogger,
+      30000,
+      report => reports.push(report),
+    );
+
+    await expect(service.getPublicIp()).rejects.toThrow('Could not determine public IP');
+    expect(reports[0].failures[0]).toEqual({
+      provider: 'https://ip1.com/ip',
+      error: 'failed to fetch https://ip1.com/ip',
+    });
+    expect(JSON.stringify(reports)).not.toContain('SUPERSECRET');
+    expect(JSON.stringify((mockLogger.warn as any).mock.calls))
+      .not.toContain('SUPERSECRET');
   });
 
   it('should cache the detected IP', async () => {
@@ -219,8 +271,37 @@ describe('IpService', () => {
 
     await expect(service.getPublicIp()).resolves.toBe('1.2.3.4');
     expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ err: expect.any(Error) }),
+      expect.objectContaining({ error: 'observer exploded' }),
       'IP detection observer failed',
     );
+  });
+});
+
+describe('isPublicIPv4', () => {
+  it('rejects private, loopback, link-local and reserved ranges', () => {
+    for (const value of [
+      '0.0.0.0',
+      '10.1.2.3',
+      '100.64.0.1',
+      '127.0.0.1',
+      '169.254.1.1',
+      '172.16.0.1',
+      '192.0.0.1',
+      '192.0.2.1',
+      '192.168.1.1',
+      '198.18.0.1',
+      '198.51.100.1',
+      '203.0.113.1',
+      '224.0.0.1',
+      '255.255.255.255',
+    ]) {
+      expect(isPublicIPv4(value), value).toBe(false);
+    }
+  });
+
+  it('accepts globally routable addresses', () => {
+    expect(isPublicIPv4('1.1.1.1')).toBe(true);
+    expect(isPublicIPv4('8.8.8.8')).toBe(true);
+    expect(isPublicIPv4('203.0.114.1')).toBe(true);
   });
 });
