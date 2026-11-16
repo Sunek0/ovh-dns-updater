@@ -88,7 +88,11 @@ const start = async () => {
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     fastify.log.error(err);
+    // The pretty-print transport runs in a worker and can lose its buffer when
+    // process.exit() runs immediately. Keep the startup failure visible.
+    console.error(message);
     process.exit(1);
   }
 };

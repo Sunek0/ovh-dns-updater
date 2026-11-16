@@ -1,5 +1,13 @@
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
-import { validateConfig } from '../src/config.js';
+import { OVH_ENDPOINTS, validateConfig } from '../src/config.js';
+
+const nodeRequire = createRequire(import.meta.url);
+const ovhEndpoints = nodeRequire('ovh/lib/endpoints.js') as Record<string, unknown>;
+
+const STRONG_API_KEY = '0123456789abcdef0123456789abcdef';
+const STRONG_ACCOUNT_TOKEN = 'fedcba9876543210fedcba9876543210';
+const OTHER_STRONG_ACCOUNT_TOKEN = '11111111111111111111111111111111';
 
 const validConfig = () => ({
   server: {
@@ -8,7 +16,7 @@ const validConfig = () => ({
     logLevel: 'info',
   },
   security: {
-    apiKey: 'master-token',
+    apiKey: STRONG_API_KEY,
   },
   ondemand: {
     enabled: true,
@@ -22,7 +30,7 @@ const validConfig = () => ({
     {
       id: 'acc1',
       provider: 'ovh',
-      token: 'account-token',
+      token: STRONG_ACCOUNT_TOKEN,
       credentials: {
         endpoint: 'ovh-eu',
         appKey: 'key',
@@ -54,7 +62,7 @@ describe('configuration validation', () => {
     const raw = validConfig();
     const config = validateConfig({
       server: {},
-      security: { apiKey: 'master-token' },
+      security: { apiKey: STRONG_API_KEY },
       ipProviders: ['http://ip.local'],
     });
 
@@ -122,7 +130,7 @@ describe('configuration validation', () => {
     const raw = validConfig();
     raw.accounts.push({
       ...raw.accounts[0],
-      token: 'other-token',
+      token: OTHER_STRONG_ACCOUNT_TOKEN,
     });
 
     expect(() => validateConfig(raw)).toThrow(/accounts\.1\.id: must be unique/);
@@ -155,7 +163,7 @@ describe('configuration validation', () => {
   it('accepts the production-style config with wildcard subdomains', () => {
     const raw = {
       server: { port: 3000, host: '0.0.0.0', logLevel: 'info' },
-      security: { apiKey: 'xxx' },
+      security: { apiKey: STRONG_API_KEY },
       ondemand: { enabled: true },
       scheduler: { enabled: true, interval: 600 },
       ipProviders: [
@@ -228,5 +236,147 @@ describe('configuration validation', () => {
     } catch (err) {
       expect(String(err)).not.toContain(raw.accounts[0].credentials.consumerKey);
     }
+  });
+
+  it('rejects a placeholder API key when the API is enabled', () => {
+    const raw = validConfig();
+    raw.security.apiKey = 'change-me';
+    raw.ondemand.enabled = true;
+    (raw as any).ui = { enabled: false };
+
+    expect(() => validateConfig(raw)).toThrow(/security\.apiKey: must not be a placeholder/);
+  });
+
+  it('rejects a placeholder API key when the UI is enabled', () => {
+    const raw = validConfig();
+    raw.security.apiKey = 'CAMBIAR_POR_UNA_CLAVE_LARGA_Y_ALEATORIA';
+    raw.ondemand.enabled = false;
+    (raw as any).ui = { enabled: true };
+
+    expect(() => validateConfig(raw)).toThrow(/security\.apiKey: must not be a placeholder/);
+  });
+
+  it('rejects a placeholder API key when ui is omitted and defaults to enabled', () => {
+    const raw = validConfig();
+    raw.security.apiKey = 'change-me';
+    raw.ondemand.enabled = false;
+
+    expect(() => validateConfig(raw)).toThrow(/security\.apiKey: must not be a placeholder/);
+  });
+
+  it('accepts the placeholder API key when the API and UI are disabled', () => {
+    const raw = validConfig();
+    raw.security.apiKey = 'change-me';
+    raw.ondemand.enabled = false;
+    (raw as any).ui = { enabled: false };
+
+    expect(() => validateConfig(raw)).not.toThrow();
+  });
+
+  it('rejects a short API key when an auth surface is enabled', () => {
+    const raw = validConfig();
+    raw.security.apiKey = 'short';
+    raw.ondemand.enabled = true;
+    (raw as any).ui = { enabled: false };
+
+    expect(() => validateConfig(raw)).toThrow(/security\.apiKey: must be at least 32/);
+  });
+
+  it('accepts a short API key when the API and UI are disabled', () => {
+    const raw = validConfig();
+    raw.security.apiKey = 'short';
+    raw.ondemand.enabled = false;
+    (raw as any).ui = { enabled: false };
+
+    expect(() => validateConfig(raw)).not.toThrow();
+  });
+
+  it('rejects a weak account token when the API is enabled', () => {
+    const raw = validConfig();
+    raw.accounts[0].token = 'short';
+    raw.ondemand.enabled = true;
+    (raw as any).ui = { enabled: false };
+
+    expect(() => validateConfig(raw)).toThrow(/accounts\.0\.token: must be at least 32/);
+  });
+
+  it('rejects a placeholder account token when the API is enabled', () => {
+    const raw = validConfig();
+    raw.accounts[0].token = 'my-secret-path-token';
+    raw.ondemand.enabled = true;
+    (raw as any).ui = { enabled: false };
+
+    expect(() => validateConfig(raw)).toThrow(/accounts\.0\.token: must not be a placeholder/);
+  });
+
+  it('accepts a weak account token when the API is disabled', () => {
+    const raw = validConfig();
+    raw.accounts[0].token = 'short';
+    raw.ondemand.enabled = false;
+    (raw as any).ui = { enabled: true };
+
+    expect(() => validateConfig(raw)).not.toThrow();
+  });
+
+  it('rejects an unsupported OVH endpoint', () => {
+    const raw = validConfig();
+    raw.accounts[0].credentials.endpoint = 'ovh-typo';
+
+    expect(() => validateConfig(raw)).toThrow(/accounts\.0\.credentials\.endpoint/);
+  });
+
+  it('keeps the endpoint list in sync with the OVH client', () => {
+    expect([...OVH_ENDPOINTS].sort()).toEqual(Object.keys(ovhEndpoints).sort());
+  });
+
+  it('trims a supported OVH endpoint', () => {
+    const raw = validConfig();
+    raw.accounts[0].credentials.endpoint = ' ovh-eu ';
+
+    const config = validateConfig(raw);
+    expect(config.accounts[0].credentials.endpoint).toBe('ovh-eu');
+  });
+
+  it('accepts an API key of exactly 32 characters when auth is enabled', () => {
+    const raw = validConfig();
+    expect(raw.security.apiKey).toHaveLength(32);
+
+    expect(() => validateConfig(raw)).not.toThrow();
+  });
+
+  it('rejects a 31-character API key when auth is enabled', () => {
+    const raw = validConfig();
+    raw.security.apiKey = '0123456789abcdef0123456789abcde';
+
+    expect(() => validateConfig(raw)).toThrow(/security\.apiKey: must be at least 32/);
+  });
+
+  it('rejects a padded placeholder API key', () => {
+    const raw = validConfig();
+    raw.security.apiKey = 'change-me'.repeat(4);
+
+    expect(() => validateConfig(raw)).toThrow(/security\.apiKey: must not be a placeholder/);
+  });
+
+  it('rejects a low-diversity API key', () => {
+    const raw = validConfig();
+    raw.security.apiKey = 'a'.repeat(32);
+
+    expect(() => validateConfig(raw)).toThrow(/security\.apiKey: must contain at least 8 distinct/);
+  });
+
+  it('rejects a low-diversity account token', () => {
+    const raw = validConfig();
+    raw.accounts[0].token = 'a'.repeat(32);
+
+    expect(() => validateConfig(raw)).toThrow(/accounts\.0\.token: must contain at least 8 distinct/);
+  });
+
+  it('accepts a weak token for a disabled account when the API is enabled', () => {
+    const raw = validConfig();
+    raw.accounts[0].token = 'short';
+    (raw.accounts[0] as any).enabled = false;
+
+    expect(() => validateConfig(raw)).not.toThrow();
   });
 });
