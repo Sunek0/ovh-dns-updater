@@ -15,7 +15,7 @@ describe('API rate limiting', () => {
       hasAccount: vi.fn().mockReturnValue(true),
     });
     app.decorate('config', {
-      security: { apiKey: 'master-token' },
+      security: { apiKey: '0123456789abcdef0123456789abcdef' },
       accounts: [],
     });
     await app.register(apiRoutes, { prefix: '/api' });

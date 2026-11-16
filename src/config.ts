@@ -1,8 +1,15 @@
 import nodeConfig from 'config';
 import { z } from 'zod';
-import { AppConfig } from './types.js';
+import { AppConfig, LOG_LEVELS } from './types.js';
 
 const nonEmptyString = z.string().trim().min(1);
+const secretSchema = z.string()
+  .trim()
+  .min(1)
+  .regex(
+    /^[^\s\u0000-\u001F\u007F]+$/,
+    'must not contain whitespace or control characters',
+  );
 
 // Keep in sync with the preconfigured endpoints in `ovh/lib/endpoints.js`.
 export const OVH_ENDPOINTS = [
@@ -21,6 +28,9 @@ export const OVH_ENDPOINTS = [
 
 const MIN_SECRET_LENGTH = 32;
 const MIN_SECRET_DIVERSITY = 8;
+const MIN_SCHEDULER_INTERVAL_SECONDS = 10;
+const MAX_TIMER_SECONDS = Math.floor((2 ** 31 - 1) / 1000);
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 // Normalize separators/case so padded variants such as
 // "change-me-change-me" cannot bypass the placeholder check.
@@ -92,8 +102,8 @@ const credentialsSchema = z.object({
   appKey: nonEmptyString,
   appSecret: nonEmptyString,
   consumerKey: nonEmptyString,
-  timeout: z.coerce.number().int().positive().optional(),
-});
+  timeout: z.coerce.number().int().positive().max(MAX_TIMEOUT_MS).optional(),
+}).strict();
 
 const subdomainSchema = z.union([
   nonEmptyString,
@@ -103,47 +113,72 @@ const subdomainSchema = z.union([
 const domainSchema = z.object({
   name: nonEmptyString,
   subdomains: z.array(subdomainSchema).default([]),
-});
+}).strict();
 
 const accountSchema = z.object({
   id: nonEmptyString,
   provider: z.literal('ovh').default('ovh'),
   enabled: z.boolean().optional(),
-  token: nonEmptyString.optional(),
+  token: secretSchema.optional(),
   recordStrategy: z.enum(['all', 'single', 'fail']).default('all'),
   credentials: credentialsSchema,
   domains: z.array(domainSchema).default([]),
-});
+}).strict();
 
 const appConfigSchema = z.object({
   server: z.object({
     port: z.coerce.number().int().min(1).max(65535).default(3000),
     host: nonEmptyString.default('0.0.0.0'),
-    logLevel: nonEmptyString.default('info'),
+    logLevel: z.enum(LOG_LEVELS).default('info'),
     trustProxy: z.boolean().default(false),
-  }),
+  }).strict(),
   security: z.object({
-    apiKey: nonEmptyString,
+    apiKey: secretSchema,
     allowLegacyGlobalAccountTokens: z.boolean().default(false),
-  }),
+    allowInsecureIpProviders: z.boolean().default(false),
+  }).strict(),
   ondemand: z.object({
     enabled: z.boolean().default(true),
-  }).default({ enabled: true }),
+  }).strict().default({ enabled: true }),
   scheduler: z.object({
     enabled: z.boolean().default(true),
-    interval: z.coerce.number().positive().default(600),
-  }).default({ enabled: true, interval: 600 }),
+    interval: z.coerce.number()
+      .int()
+      .min(MIN_SCHEDULER_INTERVAL_SECONDS)
+      .max(MAX_TIMER_SECONDS)
+      .default(600),
+  }).strict().default({ enabled: true, interval: 600 }),
   ui: z.object({
     enabled: z.boolean().default(true),
     historySize: z.coerce.number().int().min(1).max(10000).default(500),
     refreshSeconds: z.coerce.number().int().min(1).max(3600).default(10),
-  }).default({ enabled: true, historySize: 500, refreshSeconds: 10 }),
+  }).strict().default({ enabled: true, historySize: 500, refreshSeconds: 10 }),
   ipProviders: z.array(httpUrl).min(1),
   accounts: z.array(accountSchema).default([]),
-}).superRefine((value, ctx) => {
+}).strict().superRefine((value, ctx) => {
   const authSurfaceEnabled = value.ondemand.enabled || value.ui.enabled;
   const ids = new Set<string>();
   const tokens = new Set<string>();
+
+  value.ipProviders.forEach((raw, index) => {
+    const url = new URL(raw);
+
+    if (url.username || url.password) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ipProviders', index],
+        message: 'must not include credentials in the URL',
+      });
+    }
+
+    if (url.protocol === 'http:' && !value.security.allowInsecureIpProviders) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ipProviders', index],
+        message: 'must use https unless security.allowInsecureIpProviders is enabled',
+      });
+    }
+  });
 
   // `security.apiKey` only protects routes registered by the on-demand API
   // or the UI. If both toggles are off, the key is not reachable and a
@@ -212,6 +247,21 @@ export function validateConfig(raw: unknown): AppConfig {
   }
 
   return parsed.data;
+}
+
+export function formatConfigError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (message.startsWith('Invalid configuration:')) {
+    return message;
+  }
+
+  const parseError = /^Cannot parse config file: '([^']+)'/.exec(message);
+  if (parseError) {
+    return `Invalid configuration: cannot parse config file ${parseError[1]}`;
+  }
+
+  return 'Invalid configuration: could not load configuration';
 }
 
 export function loadConfig(): AppConfig {

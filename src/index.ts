@@ -1,86 +1,56 @@
-import Fastify, { LogController } from 'fastify';
-import { loadConfig } from './config.js';
-import servicesPlugin from './plugins/services.js';
-import schedulerPlugin from './plugins/scheduler.js';
-import apiRoutes from './routes/api.js';
-import statusRoutes from './routes/status.js';
-import uiRoutes from './routes/ui.js';
+import { pathToFileURL } from 'node:url';
+import type { FastifyInstance } from 'fastify';
+import { buildServer } from './app.js';
+import { formatConfigError, loadConfig } from './config.js';
+import type { AppConfig } from './types.js';
 
-const start = async () => {
-  let appConfig;
+const SHUTDOWN_TIMEOUT_MS = 8_000;
+
+export async function start(): Promise<void> {
+  let appConfig: AppConfig;
   try {
     appConfig = loadConfig();
   } catch (err) {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(formatConfigError(err));
     process.exit(1);
   }
 
-  const loggerLevel = appConfig.server.logLevel;
-  const prettyLogs =
-    process.env.NODE_ENV !== 'production' || process.env.LOG_PRETTY === 'true';
-
-  const fastify = Fastify({
-    logger: {
-      level: loggerLevel,
-      ...(prettyLogs
-        ? {
-            transport: {
-              target: 'pino-pretty',
-              options: {
-                colorize: true,
-                translateTime: 'HH:MM:ss Z',
-                ignore: 'pid,hostname',
-              },
-            },
-          }
-        : {}),
-    },
-    logController: new LogController({ disableRequestLogging: true }),
-    trustProxy: appConfig.server.trustProxy,
-  });
-
-  if (appConfig.security.allowLegacyGlobalAccountTokens) {
-    fastify.log.warn(
-      'security.allowLegacyGlobalAccountTokens is enabled: account tokens can trigger global syncs',
-    );
-  }
+  let app: FastifyInstance | undefined;
 
   try {
-    // Custom Plugins
-    await fastify.register(servicesPlugin, { appConfig });
+    const runningApp = await buildServer(appConfig);
+    app = runningApp;
 
-    if (appConfig.scheduler.enabled) {
-      await fastify.register(schedulerPlugin);
-    }
+    const { port, host } = appConfig.server;
+    runningApp.log.debug({ port, host }, 'Attempting to start server');
 
-    // Routes
-    if (appConfig.ondemand.enabled) {
-      await fastify.register(apiRoutes, { prefix: '/api' });
-    }
-
-    if (appConfig.ui.enabled) {
-      await fastify.register(statusRoutes, { prefix: '/api' });
-      await fastify.register(uiRoutes);
-    }
-
-    fastify.get('/health', async () => ({ status: 'ok' }));
-
-    // Start
-    const port = appConfig.server.port;
-    const host = appConfig.server.host;
-    
-    fastify.log.debug({ port, host }, 'Attempting to start server');
-    const address = await fastify.listen({ port, host });
-
-    fastify.log.info(`Server listening at ${address}`);
+    const address = await runningApp.listen({ port, host });
+    runningApp.log.info({ address }, 'Server listening');
 
     const shutdown = async (signal: NodeJS.Signals) => {
-      fastify.log.info({ signal }, 'Shutting down');
+      runningApp.log.info({ signal }, 'Shutting down');
+
+      const timeout = setTimeout(() => {
+        runningApp.log.error(
+          { timeoutMs: SHUTDOWN_TIMEOUT_MS },
+          'Graceful shutdown timed out, forcing exit',
+        );
+        process.exit(1);
+      }, SHUTDOWN_TIMEOUT_MS);
+      timeout.unref();
+
       try {
-        await fastify.close();
+        await runningApp.close();
+        clearTimeout(timeout);
         process.exit(0);
       } catch (err) {
-        fastify.log.error(err);
+        clearTimeout(timeout);
+        runningApp.log.error(
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+          'Graceful shutdown failed',
+        );
         process.exit(1);
       }
     };
@@ -89,12 +59,22 @@ const start = async () => {
     process.once('SIGTERM', shutdown);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    fastify.log.error(err);
+    app?.log.error({ error: message }, 'Startup failed');
     // The pretty-print transport runs in a worker and can lose its buffer when
     // process.exit() runs immediately. Keep the startup failure visible.
     console.error(message);
     process.exit(1);
   }
-};
+}
 
-start();
+function isMainModule(): boolean {
+  return process.argv[1] !== undefined
+    && import.meta.url === pathToFileURL(process.argv[1]).href;
+}
+
+if (isMainModule()) {
+  start().catch(err => {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  });
+}

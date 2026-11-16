@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
-import { OVH_ENDPOINTS, validateConfig } from '../src/config.js';
+import { OVH_ENDPOINTS, formatConfigError, validateConfig } from '../src/config.js';
 
 const nodeRequire = createRequire(import.meta.url);
 const ovhEndpoints = nodeRequire('ovh/lib/endpoints.js') as Record<string, unknown>;
@@ -53,6 +53,7 @@ describe('configuration validation', () => {
     const config = validateConfig(raw);
 
     expect(config.security.allowLegacyGlobalAccountTokens).toBe(false);
+    expect(config.security.allowInsecureIpProviders).toBe(false);
     expect(config.scheduler.interval).toBe(600);
     expect(config.accounts[0].provider).toBe('ovh');
     expect(config.accounts[0].domains[0].subdomains).toEqual(['@', 'www']);
@@ -63,7 +64,7 @@ describe('configuration validation', () => {
     const config = validateConfig({
       server: {},
       security: { apiKey: STRONG_API_KEY },
-      ipProviders: ['http://ip.local'],
+      ipProviders: ['https://ip.local'],
     });
 
     expect(config.server).toEqual({
@@ -378,5 +379,99 @@ describe('configuration validation', () => {
     (raw.accounts[0] as any).enabled = false;
 
     expect(() => validateConfig(raw)).not.toThrow();
+  });
+
+  it('rejects secrets containing whitespace or control characters', () => {
+    const raw = validConfig();
+    raw.security.apiKey = '0123456789abcdef 0123456789abcdef';
+
+    expect(() => validateConfig(raw)).toThrow(
+      /security\.apiKey: must not contain whitespace or control characters/,
+    );
+
+    const tokenConfig = validConfig();
+    tokenConfig.accounts[0].token = 'fedcba9876543210\tfedcba9876543210';
+
+    expect(() => validateConfig(tokenConfig)).toThrow(
+      /accounts\.0\.token: must not contain whitespace or control characters/,
+    );
+  });
+
+  it('rejects unknown configuration keys', () => {
+    const topLevel = validConfig() as any;
+    topLevel.schedular = { enabled: false };
+
+    expect(() => validateConfig(topLevel)).toThrow(/Unrecognized key/);
+
+    const nested = validConfig() as any;
+    nested.server.extra = true;
+
+    expect(() => validateConfig(nested)).toThrow(/Unrecognized key/);
+
+    const accountTypo = validConfig() as any;
+    accountTypo.accounts[0].enable = false;
+
+    expect(() => validateConfig(accountTypo)).toThrow(/Unrecognized key/);
+  });
+
+  it('rejects invalid log levels', () => {
+    const raw = validConfig();
+    (raw.server as any).logLevel = 'verbose';
+
+    expect(() => validateConfig(raw)).toThrow(/server\.logLevel/);
+  });
+
+  it('bounds the scheduler interval and requires whole seconds', () => {
+    for (const interval of [0.5, 9, 2_147_484]) {
+      const raw = validConfig();
+      raw.scheduler.interval = interval as any;
+
+      expect(() => validateConfig(raw)).toThrow(/scheduler\.interval/);
+    }
+
+    const minimum = validConfig();
+    minimum.scheduler.interval = 10;
+    expect(validateConfig(minimum).scheduler.interval).toBe(10);
+
+    const maximum = validConfig();
+    maximum.scheduler.interval = 2_147_483;
+    expect(validateConfig(maximum).scheduler.interval).toBe(2_147_483);
+  });
+
+  it('bounds the OVH timeout to a safe timer range', () => {
+    const raw = validConfig();
+    (raw.accounts[0].credentials as any).timeout = 2_147_483_648;
+
+    expect(() => validateConfig(raw)).toThrow(/credentials\.timeout/);
+  });
+
+  it('rejects plaintext IP providers unless explicitly allowed', () => {
+    const raw = validConfig();
+    raw.ipProviders = ['http://ip.local'];
+
+    expect(() => validateConfig(raw)).toThrow(/allowInsecureIpProviders/);
+
+    (raw.security as any).allowInsecureIpProviders = true;
+    expect(() => validateConfig(raw)).not.toThrow();
+  });
+
+  it('rejects IP providers with embedded credentials', () => {
+    const raw = validConfig();
+    raw.ipProviders = ['https://user:pass@ip.local'];
+    (raw.security as any).allowInsecureIpProviders = true;
+
+    expect(() => validateConfig(raw)).toThrow(/must not include credentials/);
+  });
+
+  it('does not expose secrets from node-config parse errors', () => {
+    const formatted = formatConfigError(new Error(
+      "Cannot parse config file: '/etc/ovh-dns-updater/local.yml': " +
+      'YAMLException: bad indentation apiKey: "SUPERSECRETVALUE_SHOULD_NOT_LEAK',
+    ));
+
+    expect(formatted).toContain('/etc/ovh-dns-updater/local.yml');
+    expect(formatted).not.toContain('SUPERSECRETVALUE_SHOULD_NOT_LEAK');
+    expect(formatConfigError(new Error('Invalid configuration: server.port: x')))
+      .toBe('Invalid configuration: server.port: x');
   });
 });

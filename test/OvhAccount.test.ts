@@ -281,7 +281,10 @@ describe('OvhAccount', () => {
 
     const account = new OvhAccount(config, mockLogger);
     const result = await account.updateAccount('1.1.1.1');
-    expect(mockLogger.error).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), 'Failed to refresh zone');
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.stringContaining('Refresh Failed') }),
+      'Failed to refresh zone',
+    );
     expect(result.status).toBe('partial');
     expect(result.domains[0].refresh).toBe('failed');
   });
@@ -393,5 +396,72 @@ describe('OvhAccount', () => {
     expect(second.domains[0].refresh).toBe('ok');
     expect(second.domains[0].subdomains[0].status).toBe('unchanged');
     expect(mockRequest.mock.calls.filter(call => call[0] === 'POST')).toHaveLength(2);
+  });
+
+  it('should report a failed PUT and still refresh the zone', async () => {
+    const wwwConfig = {
+      ...config,
+      domains: [{ name: 'example.com', subdomains: ['www'] }]
+    };
+
+    mockRequest
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123]))
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, detail('1.1.1.1', 'www')))
+      .mockImplementationOnce((m, p, pa, cb) => cb(new Error('PUT failed')))
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})); // refresh
+
+    const account = new OvhAccount(wwwConfig, mockLogger);
+    const result = await account.updateAccount('9.9.9.9');
+
+    expect(result.status).toBe('failed');
+    expect(result.domains[0].refresh).toBe('ok');
+    expect(result.domains[0].subdomains[0]).toMatchObject({
+      status: 'failed',
+      records: [{ recordId: 123, status: 'failed', error: expect.stringContaining('PUT failed') }],
+    });
+  });
+
+  it('should report not-found when every returned record belongs to another subdomain', async () => {
+    const rootConfig = {
+      ...config,
+      domains: [{ name: 'example.com', subdomains: ['@'] }]
+    };
+
+    mockRequest
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123]))
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, detail('1.1.1.1', 'www')))
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})); // refresh
+
+    const account = new OvhAccount(rootConfig, mockLogger);
+    const result = await account.updateAccount('9.9.9.9');
+
+    expect(result.domains[0].subdomains[0].status).toBe('not-found');
+    expect(mockRequest.mock.calls.filter(call => call[0] === 'PUT')).toHaveLength(0);
+  });
+
+  it('should redact credentials from OVH errors before logging or returning them', async () => {
+    const secretConfig = {
+      ...config,
+      credentials: {
+        ...config.credentials,
+        appSecret: 'APP_SECRET_SHOULD_NOT_LEAK',
+      },
+      domains: [{ name: 'example.com', subdomains: ['www'] }]
+    };
+
+    mockRequest
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, [123]))
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, detail('1.1.1.1', 'www')))
+      .mockImplementationOnce((m, p, pa, cb) => cb(
+        new Error('PUT failed with APP_SECRET_SHOULD_NOT_LEAK'),
+      ))
+      .mockImplementationOnce((m, p, pa, cb) => cb(null, {})); // refresh
+
+    const account = new OvhAccount(secretConfig, mockLogger);
+    const result = await account.updateAccount('9.9.9.9');
+
+    expect(JSON.stringify(result)).not.toContain('APP_SECRET_SHOULD_NOT_LEAK');
+    expect(JSON.stringify(mockLogger.error.mock.calls))
+      .not.toContain('APP_SECRET_SHOULD_NOT_LEAK');
   });
 });

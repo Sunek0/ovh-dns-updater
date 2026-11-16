@@ -1,6 +1,6 @@
 import fp from 'fastify-plugin';
 import { FastifyPluginAsync } from 'fastify';
-import type { SyncTrigger } from '../services/StateStore.js';
+import type { SyncTrigger } from '../types.js';
 
 // Simple background scheduler
 const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
@@ -14,6 +14,7 @@ const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
   let intervalId: NodeJS.Timeout | undefined;
   let startupTimeoutId: NodeJS.Timeout | undefined;
   let syncInProgress = false;
+  let inFlightSync: Promise<void> | undefined;
 
   const runScheduledSync = async (label: string, trigger: SyncTrigger) => {
     if (syncInProgress) {
@@ -22,17 +23,35 @@ const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
     }
 
     syncInProgress = true;
+    const task = (async () => {
+      try {
+        await fastify.updaterService.syncAll(false, undefined, trigger);
+      } catch (err) {
+        fastify.log.error(
+          {
+            job: label,
+            error: err instanceof Error ? err.message : String(err),
+          },
+          'Scheduled sync failed',
+        );
+      } finally {
+        syncInProgress = false;
+      }
+    })();
+
+    inFlightSync = task;
+
     try {
-      await fastify.updaterService.syncAll(false, undefined, trigger);
-    } catch (err) {
-      fastify.log.error({ err }, label);
+      await task;
     } finally {
-      syncInProgress = false;
+      if (inFlightSync === task) {
+        inFlightSync = undefined;
+      }
     }
   };
 
-  // Cleanup must be registered during plugin registration, not deferred
-  fastify.addHook('onClose', async () => {
+  // Stop scheduling before Fastify drains open connections.
+  fastify.addHook('preClose', async () => {
     if (startupTimeoutId) {
       clearTimeout(startupTimeoutId);
     }
@@ -42,12 +61,23 @@ const schedulerPlugin: FastifyPluginAsync = async (fastify, _opts) => {
     }
   });
 
+  // Give an in-flight OVH update a chance to finish before the process exits.
+  fastify.addHook('onClose', async () => {
+    if (inFlightSync) {
+      fastify.log.info('Waiting for in-flight scheduled sync');
+      await inFlightSync;
+    }
+  });
+
   // Start the scheduler after the server is fully booted
   fastify.addHook('onReady', async () => {
     // Small delay to ensure the event loop is free and server is listening
     startupTimeoutId = setTimeout(() => {
-      fastify.log.info(`Starting background scheduler (${INTERVAL / 1000}s)`);
-      
+      fastify.log.info(
+        { intervalSeconds: INTERVAL / 1000 },
+        'Starting background scheduler',
+      );
+
       // Initial run immediately
       void runScheduledSync('Initial scheduled sync failed', 'startup');
 

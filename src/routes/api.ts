@@ -13,20 +13,18 @@ export const RATE_LIMITS = {
   setip: { max: 10, timeWindow: '1 minute' },
 } as const;
 
+const PUBLIC_ROUTES = new Set(['/api/public-ip']);
+
 const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
   addApiResponseHeaders(fastify);
   await fastify.register(rateLimit, { global: false });
 
-  // Auth hook
+  // Default-deny: every route registered by this plugin requires auth unless
+  // it is explicitly listed as public. This avoids new management routes
+  // accidentally shipping unprotected.
   fastify.addHook('onRequest', async (request, reply) => {
-    // Endpoints requiring authentication
     const routeUrl = request.routeOptions.url ?? '';
-    const isProtected =
-      routeUrl.startsWith('/api/sync') ||
-      routeUrl.startsWith('/api/accounts') ||
-      routeUrl.includes('/api/:token/');
-
-    if (!isProtected) return;
+    if (PUBLIC_ROUTES.has(routeUrl)) return;
 
     const expectedApiKey = fastify.config.security.apiKey;
 
@@ -83,43 +81,67 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
         details: { [accountId]: result },
       };
     } catch (err) {
-      request.log.error({ err, accountId }, 'Account sync failed');
+      request.log.error(
+        {
+          accountId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        'Account sync failed',
+      );
       return reply.code(502).send({ error: 'Account sync failed' });
+    }
+  };
+
+  const handleGlobalSync = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    force: boolean,
+    providedIp?: string,
+  ) => {
+    try {
+      return providedIp === undefined
+        ? await fastify.updaterService.syncAll(force)
+        : await fastify.updaterService.syncAll(force, providedIp);
+    } catch (err) {
+      request.log.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        'Global sync failed',
+      );
+      return reply.code(502).send({ error: 'Sync failed' });
     }
   };
 
   fastify.get('/public-ip', {
     config: { rateLimit: RATE_LIMITS.publicIp },
-  }, async (req, _res) => {
+  }, async (req, reply) => {
     req.log.info('Received public-ip request');
-    const ip = await fastify.updaterService.getPublicIp();
-    return { ip };
+    try {
+      const ip = await fastify.updaterService.getPublicIp();
+      return { ip };
+    } catch (err) {
+      req.log.error(
+        { error: err instanceof Error ? err.message : String(err) },
+        'Public IP detection failed',
+      );
+      return reply.code(502).send({ error: 'IP detection failed' });
+    }
   });
 
   fastify.post('/sync', {
     config: { rateLimit: RATE_LIMITS.sync },
   }, async (req, reply) => {
-    if (req.auth?.kind === 'account') {
-      return reply.code(403).send({ error: 'Forbidden' });
-    }
-
     req.log.info('Received sync all request');
-    const result = await fastify.updaterService.syncAll(true);
-    return result;
+    return handleGlobalSync(req, reply, true);
   });
 
   fastify.post<{ Params: { id: string } }>('/accounts/:id/sync', {
     config: { rateLimit: RATE_LIMITS.accountSync },
   }, async (req, reply) => {
-    if (req.auth?.kind === 'account') {
-      return reply.code(403).send({ error: 'Forbidden' });
-    }
-
     if (!fastify.updaterService.hasAccount(req.params.id)) {
       return reply.code(404).send({ error: 'Account not found' });
     }
 
-    req.log.info(`Received sync request for account: ${req.params.id}`);
+    req.log.info({ accountId: req.params.id }, 'Received account sync request');
     const { ip, result } = await fastify.updaterService.syncAccount(req.params.id);
     return {
       message: 'Synced',
@@ -137,8 +159,7 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
     }
 
     req.log.info('Received checkip request');
-    const result = await fastify.updaterService.syncAll(false);
-    return result;
+    return handleGlobalSync(req, reply, false);
   });
 
   fastify.get<{ Params: { token: string; ip: string } }>('/:token/setip/:ip', {
@@ -152,9 +173,8 @@ const apiRoutes: FastifyPluginAsync = async (fastify, _opts) => {
       return handleAccountSync(req, reply, req.auth.accountId, req.params.ip);
     }
 
-    req.log.info(`Received setip request with IP: ${req.params.ip}`);
-    const result = await fastify.updaterService.syncAll(true, req.params.ip);
-    return result;
+    req.log.info({ ip: req.params.ip }, 'Received setip request');
+    return handleGlobalSync(req, reply, true, req.params.ip);
   });
 };
 

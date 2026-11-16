@@ -445,6 +445,79 @@ describe('StateStore', () => {
     );
   });
 
+  it('records partial updates without losing the failed record value', () => {
+    const store = new StateStore({
+      now: () => T0,
+      accounts: [{ id: 'acc1', domains: [{ name: 'example.com', subdomains: ['@'] }] }],
+    });
+
+    store.recordRecordResult({
+      trigger: 'scheduler',
+      at: T0,
+      accountId: 'acc1',
+      domain: 'example.com',
+      subdomain: '',
+      targetIp: '3.3.3.3',
+      result: {
+        domain: 'example.com',
+        subdomain: '',
+        status: 'partial',
+        error: '1 of 2 records failed',
+        records: [
+          { recordId: 1, previousTarget: '1.1.1.1', status: 'updated' },
+          { recordId: 2, previousTarget: '2.2.2.2', status: 'failed', error: 'boom' },
+        ],
+      },
+    });
+
+    const snapshot = store.getSnapshot();
+    expect(snapshot.accounts[0].domains[0].records[0]).toMatchObject({
+      status: 'error',
+      initialValue: '1.1.1.1, 2.2.2.2',
+      currentValue: '3.3.3.3, 2.2.2.2',
+      lastError: '1 of 2 records failed',
+      lastChangedAt: T0.toISOString(),
+    });
+    expect(snapshot.counters).toEqual({ checks: 0, updates: 1, errors: 1 });
+    expect(store.getEvents().events[0]).toEqual(expect.objectContaining({
+      action: 'error',
+      message: '1 of 2 records failed',
+    }));
+  });
+
+  it('records a missing A record as not-found with a friendly error', () => {
+    const store = new StateStore({
+      now: () => T0,
+      accounts: [{ id: 'acc1', domains: [{ name: 'example.com', subdomains: ['www'] }] }],
+    });
+
+    store.recordRecordResult({
+      trigger: 'scheduler',
+      at: T0,
+      accountId: 'acc1',
+      domain: 'example.com',
+      subdomain: 'www',
+      targetIp: '1.1.1.1',
+      result: {
+        domain: 'example.com',
+        subdomain: 'www',
+        status: 'not-found',
+      },
+    });
+
+    const record = store.getSnapshot().accounts[0].domains[0].records[0];
+    expect(record).toMatchObject({
+      status: 'error',
+      initialValue: null,
+      currentValue: null,
+      lastError: 'No se encontró el registro A en OVH',
+    });
+    expect(store.getEvents().events[0]).toEqual(expect.objectContaining({
+      action: 'error',
+      fqdn: 'www.example.com',
+    }));
+  });
+
   it('notifies subscribers, isolates listener failures and supports unsubscribe', () => {
     const store = new StateStore({
       now: () => T0,

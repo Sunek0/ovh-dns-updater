@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Fastify from 'fastify';
+import schedulerPlugin from '../src/plugins/scheduler.js';
 import { UpdaterService } from '../src/services/UpdaterService.js';
 
 const logger: any = {
@@ -80,5 +82,113 @@ describe('UpdaterService initialization', () => {
     const config: any = { accounts: [account()] };
     const service = new UpdaterService(config, ipService, logger);
     expect(service.hasAccount('acc1')).toBe(true);
+  });
+});
+
+describe('scheduler plugin', () => {
+  const successResult = { status: 'success' as const, domains: [] };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function build(interval = 600) {
+    const app = Fastify({ logger: false });
+    const syncAll = vi.fn().mockResolvedValue(successResult);
+
+    app.decorate('config', {
+      scheduler: { enabled: true, interval },
+    } as any);
+    app.decorate('updaterService', { syncAll } as any);
+
+    await app.register(schedulerPlugin);
+    await app.ready();
+
+    return { app, syncAll };
+  }
+
+  it('runs an initial sync and then periodic syncs', async () => {
+    const { app, syncAll } = await build();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(syncAll).toHaveBeenCalledWith(false, undefined, 'startup');
+
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(syncAll).toHaveBeenCalledWith(false, undefined, 'scheduler');
+
+    await app.close();
+  });
+
+  it('skips a run while the previous sync is still in flight', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const app = Fastify({ logger: false });
+    const syncAll = vi.fn()
+      .mockImplementationOnce(() => gate.then(() => successResult))
+      .mockResolvedValue(successResult);
+
+    app.decorate('config', {
+      scheduler: { enabled: true, interval: 600 },
+    } as any);
+    app.decorate('updaterService', { syncAll } as any);
+    await app.register(schedulerPlugin);
+    await app.ready();
+
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(syncAll).toHaveBeenCalledTimes(1);
+
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    await app.close();
+  });
+
+  it('stops scheduling after close', async () => {
+    const { app, syncAll } = await build();
+
+    await vi.advanceTimersByTimeAsync(100);
+    await app.close();
+    await vi.advanceTimersByTimeAsync(1_200_000);
+
+    expect(syncAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for an in-flight sync before closing', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const app = Fastify({ logger: false });
+    const syncAll = vi.fn().mockImplementationOnce(
+      () => gate.then(() => successResult),
+    );
+
+    app.decorate('config', {
+      scheduler: { enabled: true, interval: 600 },
+    } as any);
+    app.decorate('updaterService', { syncAll } as any);
+    await app.register(schedulerPlugin);
+    await app.ready();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(syncAll).toHaveBeenCalledTimes(1);
+
+    let closed = false;
+    const closePromise = app.close().then(() => {
+      closed = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closed).toBe(false);
+
+    release();
+    await closePromise;
+    expect(closed).toBe(true);
   });
 });

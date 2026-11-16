@@ -6,8 +6,9 @@ import {
   type StateChangeListener,
   type StatusEvent,
   type StatusSnapshot,
-} from '../services/StateStore.js';
+} from '../types.js';
 import { isMasterBearer } from '../utils/auth.js';
+import { matchesEventFilter } from '../utils/events.js';
 import { addApiResponseHeaders } from '../utils/http.js';
 
 interface EventQuery {
@@ -59,19 +60,12 @@ function parseEventFilter(query: EventQuery): {
   };
 }
 
-function matchesEventFilter(event: StatusEvent, filter: EventFilter): boolean {
-  if (filter.account && event.accountId !== filter.account) return false;
-  if (filter.domain && event.domain !== filter.domain) return false;
-  if (filter.type && event.action !== filter.type) return false;
-  return true;
-}
-
 const statusRoutes: FastifyPluginAsync = async fastify => {
   addApiResponseHeaders(fastify);
 
   const activeStreams = new Set<() => void>();
 
-  fastify.addHook('onClose', async () => {
+  fastify.addHook('preClose', async () => {
     for (const close of [...activeStreams]) {
       close();
     }
@@ -128,7 +122,11 @@ const statusRoutes: FastifyPluginAsync = async fastify => {
     let heartbeatTimer: NodeJS.Timeout | undefined;
     let unsubscribe: (() => void) | undefined;
     const pendingEvents: StatusEvent[] = [];
-    const pendingEventLimit = Math.min(filter.limit ?? 100, 1000);
+    const pendingEventLimit = Math.min(
+      filter.limit ?? 100,
+      1000,
+      store.eventCapacity,
+    );
 
     const cleanup = () => {
       if (closed) return;

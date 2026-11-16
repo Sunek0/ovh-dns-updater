@@ -12,6 +12,9 @@ security:
   # Legacy behaviour: allow account path tokens to trigger a global sync.
   # Keep disabled for proper per-account isolation.
   allowLegacyGlobalAccountTokens: false
+  # Allow http:// IP providers. Keep disabled: a plaintext provider can be
+  # tampered with and would control the addresses written to your DNS records.
+  allowInsecureIpProviders: false
 
 ondemand:
   enabled: true
