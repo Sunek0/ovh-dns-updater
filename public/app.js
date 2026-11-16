@@ -45,7 +45,6 @@ const state = {
   reconnectTimer: null,
   tickTimer: null,
   streamController: null,
-  streamConnected: false,
   streamState: 'idle',
   streamAttempts: 0,
   lastStreamActivityAt: null,
@@ -588,7 +587,6 @@ async function readSseStream(body, onFrame) {
 function applyStreamSnapshot(snapshot) {
   setSnapshot(snapshot);
   state.streamState = 'connected';
-  state.streamConnected = true;
   state.streamAttempts = 0;
   state.pollingFallback = false;
   clearPollTimer();
@@ -649,7 +647,6 @@ function stopStream() {
     window.clearTimeout(state.reconnectTimer);
     state.reconnectTimer = null;
   }
-  state.streamConnected = false;
   state.lastStreamActivityAt = null;
 }
 
@@ -669,7 +666,6 @@ function startPollingFallback() {
 function handleStreamFailure() {
   if (!state.apiKey || !state.visible) return;
 
-  state.streamConnected = false;
   state.streamAttempts += 1;
 
   if (state.streamAttempts > STREAM_RETRY_DELAYS.length) {
@@ -694,7 +690,6 @@ async function startLiveUpdates() {
   const controller = new AbortController();
   state.streamController = controller;
   state.streamState = 'connecting';
-  state.streamConnected = false;
   state.pollingFallback = false;
   clearPollTimer();
   updateLastUpdatedLabel();
